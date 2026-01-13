@@ -71,7 +71,7 @@ export async function viewDashboard() {
                   </div>
                 </div>
 
-                <div class="dash-snapshot-table" style="margin-top: 12px;">
+                <div class="dash-snapshot-table">
                   ${table(
                       ['account', 'opening', 'delta', 'balance'],
                       balances.map((r) => ({

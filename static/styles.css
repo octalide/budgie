@@ -128,6 +128,38 @@ a {
     margin-bottom: 10px;
 }
 
+.table-tools--wrap {
+    flex-wrap: wrap;
+    align-items: flex-end;
+}
+
+.table-tools--wrap .tool {
+    min-width: 160px;
+    flex: 1 1 220px;
+}
+
+.table-tools--wrap .tool--small {
+    flex: 0 0 180px;
+    min-width: 180px;
+}
+
+.table-tools--wrap .tool--tiny {
+    flex: 0 0 110px;
+    min-width: 110px;
+}
+
+.table-tools--wrap .tool--actions {
+    flex: 0 0 auto;
+    min-width: auto;
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+}
+
+.table-tools--wrap label {
+    margin-bottom: 4px;
+}
+
 .table-filter {
     flex: 1;
     min-width: 160px;
@@ -188,6 +220,12 @@ a {
     height: 100%;
 }
 
+.dashboard > .card > .card__body {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
 .dashboard .split {
     height: 100%;
     min-height: 0;
@@ -199,7 +237,11 @@ a {
 }
 
 .dashboard .split > .card > .card__body {
-    overflow: auto;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
 }
 
 .dash-snapshot {
@@ -207,10 +249,23 @@ a {
     flex-direction: column;
     gap: 12px;
     min-height: 0;
+    flex: 1;
 }
 
 .dash-snapshot-table {
+    margin-top: 12px;
     min-height: 0;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+/* On the dashboard, let the accounts table fill the remaining pane height.
+   The filter/tools stay fixed above, and the table body scrolls inside .table-wrap. */
+.dashboard .dash-snapshot-table .table-wrap {
+    flex: 1;
+    min-height: 0;
+    max-height: none;
 }
 
 .dash-projection {
@@ -218,6 +273,7 @@ a {
     flex-direction: column;
     gap: 10px;
     min-height: 0;
+    flex: 1;
 }
 
 .dash-projection-chart {

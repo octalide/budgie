@@ -2,16 +2,22 @@ import { $, $$, escapeHtml } from '../js/dom.js';
 import { api } from '../js/api.js';
 import { isoToday } from '../js/date.js';
 import { fmtDollarsFromCents, parseCentsFromDollarsString } from '../js/money.js';
-import { activeNav, card, table, wireTableFilters } from '../js/ui.js';
+import { activeNav, card, table } from '../js/ui.js';
 
 export async function viewSchedules() {
     activeNav('schedules');
     const accounts = await api('/api/accounts');
     const schedules = await api('/api/schedules');
 
+  const acctById = new Map(accounts.data.map((a) => [a.id, a]));
+
     const acctOpts = ['<option value="">(none)</option>']
         .concat(accounts.data.map((a) => `<option value="${a.id}">${escapeHtml(a.name)}</option>`))
         .join('');
+
+    const acctFilterOpts = ['<option value="">Any</option>', '<option value="__none__">(none)</option>']
+      .concat(accounts.data.map((a) => `<option value="${a.id}">${escapeHtml(a.name)}</option>`))
+      .join('');
 
     const rows = schedules.data.map((s) => ({
         id: s.id,
@@ -28,6 +34,15 @@ export async function viewSchedules() {
         byweekday: s.byweekday || '',
         is_active: s.is_active,
     }));
+
+    const kindLabel = (k) => (k === 'E' ? 'E (expense)' : k === 'I' ? 'I (income)' : k === 'T' ? 'T (transfer)' : String(k || ''));
+    const freqLabel = (f) => (f === 'D' ? 'D (daily)' : f === 'W' ? 'W (weekly)' : f === 'M' ? 'M (monthly)' : f === 'Y' ? 'Y (yearly)' : String(f || ''));
+    const acctName = (id) => {
+      if (id === null || id === undefined || id === '') return '';
+      const n = Number(id);
+      if (!Number.isFinite(n)) return '';
+      return acctById.get(n)?.name || String(id);
+    };
 
     $('#page').innerHTML = `
     <div class="split">
@@ -84,7 +99,7 @@ export async function viewSchedules() {
             </div>
             <div>
               <label>bymonthday (1-31)</label>
-              <input id="s_dom" placeholder="15" />
+              <input id="s_dom" placeholder="" />
             </div>
 
             <div>
@@ -114,18 +129,58 @@ export async function viewSchedules() {
       ${card(
         'Schedules',
         `${rows.length} total`,
-        table(
-            // ['id', 'name', 'kind', 'freq', 'interval', 'amount', 'start_date', 'end_date', 'is_active'],
-            ['name', 'kind', 'freq', 'interval', 'amount', 'start_date', 'end_date', 'is_active'],
-            rows,
-            (r) => `
-            <div class="row-actions">
-              <button data-edit-schedule="${r.id}">Edit</button>
-              <button class="danger" data-del-schedule="${r.id}">Delete</button>
+        `
+          <div class="table-tools table-tools--wrap" style="margin-bottom: 12px;">
+            <div class="tool">
+              <label>Search</label>
+              <input id="sf_q" placeholder="Name / description…" />
             </div>
-          `,
-            { id: 'schedules', filter: true, filterPlaceholder: 'Filter schedules…' }
-        )
+            <div class="tool tool--small">
+              <label>Kind</label>
+              <select id="sf_kind">
+                <option value="">Any</option>
+                <option value="E">E (expense)</option>
+                <option value="I">I (income)</option>
+                <option value="T">T (transfer)</option>
+              </select>
+            </div>
+            <div class="tool tool--small">
+              <label>Frequency</label>
+              <select id="sf_freq">
+                <option value="">Any</option>
+                <option value="D">D (daily)</option>
+                <option value="W">W (weekly)</option>
+                <option value="M">M (monthly)</option>
+                <option value="Y">Y (yearly)</option>
+              </select>
+            </div>
+            <div class="tool tool--tiny">
+              <label>Interval</label>
+              <input id="sf_interval" placeholder="any" />
+            </div>
+            <div class="tool">
+              <label>Src</label>
+              <select id="sf_src">${acctFilterOpts}</select>
+            </div>
+            <div class="tool">
+              <label>Dest</label>
+              <select id="sf_dest">${acctFilterOpts}</select>
+            </div>
+            <div class="tool tool--small">
+              <label>Active</label>
+              <select id="sf_active">
+                <option value="">Any</option>
+                <option value="1">Active</option>
+                <option value="0">Inactive</option>
+              </select>
+            </div>
+            <div class="tool tool--actions">
+              <button id="sf_clear" type="button">Clear</button>
+              <div class="table-count" id="sf_count"></div>
+            </div>
+          </div>
+          <div id="schedules_table"></div>
+        `
     )}
     </div>
 
@@ -143,7 +198,147 @@ export async function viewSchedules() {
 
     const byId = new Map(schedules.data.map((s) => [s.id, s]));
 
-    wireTableFilters($('#page'));
+    const listEl = $('#schedules_table');
+    const countEl = $('#sf_count');
+
+    const filterState = {
+      q: '',
+      kind: '',
+      freq: '',
+      interval: '',
+      src: '',
+      dest: '',
+      active: '',
+    };
+
+    const matchesAcctFilter = (val, id) => {
+      if (val === '') return true;
+      const cur = id === null || id === undefined ? null : Number(id);
+      if (val === '__none__') return cur === null || !Number.isFinite(cur);
+      const want = Number(val);
+      return Number.isFinite(want) && Number.isFinite(cur) && cur === want;
+    };
+
+    const applyFilters = () => {
+      const q = (filterState.q || '').trim().toLowerCase();
+      const wantInterval = (filterState.interval || '').trim();
+      const wantIntervalN = wantInterval ? Number(wantInterval) : null;
+
+      const filtered = schedules.data.filter((s) => {
+        if (filterState.kind && s.kind !== filterState.kind) return false;
+        if (filterState.freq && s.freq !== filterState.freq) return false;
+        if (filterState.active !== '') {
+          const want = Number(filterState.active);
+          const cur = Number(s.is_active ? 1 : 0);
+          if (cur !== want) return false;
+        }
+        if (wantIntervalN !== null && Number.isFinite(wantIntervalN)) {
+          if (Number(s.interval) !== wantIntervalN) return false;
+        }
+        if (!matchesAcctFilter(filterState.src, s.src_account_id)) return false;
+        if (!matchesAcctFilter(filterState.dest, s.dest_account_id)) return false;
+        if (q) {
+          const hay = `${s.name || ''} ${(s.description || '')}`.toLowerCase();
+          if (!hay.includes(q)) return false;
+        }
+        return true;
+      });
+      return filtered;
+    };
+
+    const bindRowActions = (root) => {
+      root.querySelectorAll('[data-del-schedule]').forEach((btn) => {
+        btn.onclick = async () => {
+          const id = Number(btn.dataset.delSchedule);
+          if (!confirm('Delete schedule? (revisions will be deleted, entries will just unlink)')) return;
+          try {
+            await api(`/api/schedules/${id}`, { method: 'DELETE' });
+            location.hash = '#/schedules';
+          } catch (e) {
+            alert(e.message);
+          }
+        };
+      });
+
+      root.querySelectorAll('[data-edit-schedule]').forEach((btn) => {
+        btn.onclick = () => renderScheduleEditor(Number(btn.dataset.editSchedule));
+      });
+    };
+
+    const renderList = () => {
+      const filtered = applyFilters();
+
+      const viewRows = filtered.map((s) => ({
+        id: s.id,
+        name: s.name,
+        kind: { text: s.kind, title: kindLabel(s.kind) },
+        freq: { text: s.freq, title: freqLabel(s.freq) },
+        interval: s.interval,
+        amount: fmtDollarsFromCents(s.amount_cents),
+        start_date: s.start_date,
+        end_date: s.end_date || '',
+        src: acctName(s.src_account_id),
+        dest: acctName(s.dest_account_id),
+        is_active: s.is_active ? '1' : '0',
+      }));
+
+      listEl.innerHTML = table(
+        ['name', 'kind', 'freq', 'interval', 'amount', 'start_date', 'end_date', 'src', 'dest', 'is_active'],
+        viewRows,
+        (r) => `
+          <div class="row-actions">
+            <button data-edit-schedule="${r.id}">Edit</button>
+            <button class="danger" data-del-schedule="${r.id}">Delete</button>
+          </div>
+        `,
+        { id: 'schedules-list' }
+      );
+
+      if (countEl) countEl.textContent = `${filtered.length} / ${schedules.data.length}`;
+      bindRowActions(listEl);
+    };
+
+    const wireFilters = () => {
+      const q = $('#sf_q');
+      const kind = $('#sf_kind');
+      const freq = $('#sf_freq');
+      const interval = $('#sf_interval');
+      const src = $('#sf_src');
+      const dest = $('#sf_dest');
+      const active = $('#sf_active');
+
+      const sync = () => {
+        filterState.q = q?.value || '';
+        filterState.kind = kind?.value || '';
+        filterState.freq = freq?.value || '';
+        filterState.interval = interval?.value || '';
+        filterState.src = src?.value || '';
+        filterState.dest = dest?.value || '';
+        filterState.active = active?.value || '';
+        renderList();
+      };
+
+      q?.addEventListener('input', sync);
+      kind?.addEventListener('change', sync);
+      freq?.addEventListener('change', sync);
+      interval?.addEventListener('input', sync);
+      src?.addEventListener('change', sync);
+      dest?.addEventListener('change', sync);
+      active?.addEventListener('change', sync);
+
+      $('#sf_clear').onclick = () => {
+        if (q) q.value = '';
+        if (kind) kind.value = '';
+        if (freq) freq.value = '';
+        if (interval) interval.value = '';
+        if (src) src.value = '';
+        if (dest) dest.value = '';
+        if (active) active.value = '';
+        sync();
+      };
+
+      sync();
+    };
 
     $('#s_create').onclick = async () => {
         try {
@@ -175,19 +370,6 @@ export async function viewSchedules() {
             alert(e.message);
         }
     };
-
-    $$('#page [data-del-schedule]').forEach((btn) => {
-        btn.onclick = async () => {
-            const id = Number(btn.dataset.delSchedule);
-            if (!confirm('Delete schedule? (revisions will be deleted, entries will just unlink)')) return;
-            try {
-                await api(`/api/schedules/${id}`, { method: 'DELETE' });
-                location.hash = '#/schedules';
-            } catch (e) {
-                alert(e.message);
-            }
-        };
-    });
 
     const renderScheduleEditor = (id) => {
         const s = byId.get(id);
@@ -308,7 +490,5 @@ export async function viewSchedules() {
         };
     };
 
-    $$('#page [data-edit-schedule]').forEach((btn) => {
-        btn.onclick = () => renderScheduleEditor(Number(btn.dataset.editSchedule));
-    });
+    wireFilters();
 }
