@@ -1,0 +1,9 @@
+# SQLite databases
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# OS / editor
+.DS_Store
+.vscode/

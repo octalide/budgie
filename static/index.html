@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>budgie</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+</head>
+
+<body>
+    <div class="app">
+        <header class="topbar">
+            <div class="brand">
+                <div class="brand__title">budgie</div>
+                <div class="brand__subtitle">budget planning utility</div>
+            </div>
+            <div class="topbar__right">
+                <div id="status" class="status">Connecting…</div>
+            </div>
+        </header>
+
+        <div class="layout">
+            <nav class="sidebar">
+                <a class="navlink" href="#/dashboard" data-route="dashboard">Dashboard</a>
+                <a class="navlink" href="#/accounts" data-route="accounts">Accounts</a>
+                <a class="navlink" href="#/schedules" data-route="schedules">Schedules</a>
+                <a class="navlink" href="#/revisions" data-route="revisions">Revisions</a>
+                <a class="navlink" href="#/entries" data-route="entries">Entries</a>
+                <a class="navlink" href="#/projection" data-route="projection">Projection</a>
+            </nav>
+
+            <main class="main">
+                <div class="page" id="page"></div>
+            </main>
+        </div>
+
+        <footer class="footer">
+            <div class="hint">
+                Tip: amounts are stored as cents; the UI accepts $ values like <span class="mono">12.34</span>.
+            </div>
+        </footer>
+    </div>
+
+    <script type="module" src="/static/app.js"></script>
+</body>
+
+</html>

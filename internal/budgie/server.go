@@ -1,0 +1,820 @@
+package budgie
+
+import (
+	"database/sql"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+)
+
+type server struct {
+	db *sql.DB
+}
+
+func (s *server) meta(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, map[string]any{
+		"ok": true,
+		"enums": map[string]any{
+			"schedule_kind": []string{"I", "E", "T"},
+			"schedule_freq": []string{"D", "W", "M", "Y"},
+		},
+	})
+}
+
+func (s *server) accounts(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		rows, err := s.db.Query("SELECT * FROM account ORDER BY archived_at IS NOT NULL, name")
+		if err != nil {
+			writeErr(w, serverError("failed to query accounts", err))
+			return
+		}
+		defer rows.Close()
+		data, err := rowsToMaps(rows)
+		if err != nil {
+			writeErr(w, serverError("failed to read accounts", err))
+			return
+		}
+		writeOK(w, data)
+	case http.MethodPost:
+		var body struct {
+			Name                string  `json:"name"`
+			OpeningDate         string  `json:"opening_date"`
+			OpeningBalanceCents int64   `json:"opening_balance_cents"`
+			Description         *string `json:"description"`
+			ArchivedAt          *string `json:"archived_at"`
+		}
+		if e := readJSON(r, &body); e != nil {
+			writeErr(w, e)
+			return
+		}
+		if strings.TrimSpace(body.Name) == "" {
+			writeErr(w, badRequest("name is required", nil))
+			return
+		}
+		od, e := requireDate(body.OpeningDate, "opening_date")
+		if e != nil {
+			writeErr(w, e)
+			return
+		}
+		archivedAt, e := optionalDate(body.ArchivedAt, "archived_at")
+		if e != nil {
+			writeErr(w, e)
+			return
+		}
+
+		res, err := s.db.Exec(
+			"INSERT INTO account (name, opening_date, opening_balance_cents, description, archived_at) VALUES (?, ?, ?, ?, ?)",
+			strings.TrimSpace(body.Name), od, body.OpeningBalanceCents, body.Description, archivedAt,
+		)
+		if err != nil {
+			writeErr(w, badRequest("could not create account", map[string]any{"sqlite": err.Error()}))
+			return
+		}
+		id, _ := res.LastInsertId()
+		created, apiE := scanRowToMap(s.db, "account", id)
+		if apiE != nil {
+			writeErr(w, apiE)
+			return
+		}
+		writeOK(w, created)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *server) accountByID(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseIDFromPath("/api/accounts/", r.URL.Path)
+	if !ok {
+		writeErr(w, notFound("not found"))
+		return
+	}
+
+	switch r.Method {
+	case http.MethodPut:
+		var body struct {
+			Name                string  `json:"name"`
+			OpeningDate         string  `json:"opening_date"`
+			OpeningBalanceCents int64   `json:"opening_balance_cents"`
+			Description         *string `json:"description"`
+			ArchivedAt          *string `json:"archived_at"`
+		}
+		if e := readJSON(r, &body); e != nil {
+			writeErr(w, e)
+			return
+		}
+		if strings.TrimSpace(body.Name) == "" {
+			writeErr(w, badRequest("name is required", nil))
+			return
+		}
+		od, e := requireDate(body.OpeningDate, "opening_date")
+		if e != nil {
+			writeErr(w, e)
+			return
+		}
+		archivedAt, e := optionalDate(body.ArchivedAt, "archived_at")
+		if e != nil {
+			writeErr(w, e)
+			return
+		}
+
+		_, err := s.db.Exec(
+			"UPDATE account SET name=?, opening_date=?, opening_balance_cents=?, description=?, archived_at=? WHERE id=?",
+			strings.TrimSpace(body.Name), od, body.OpeningBalanceCents, body.Description, archivedAt, id,
+		)
+		if err != nil {
+			writeErr(w, badRequest("could not update account", map[string]any{"sqlite": err.Error()}))
+			return
+		}
+		updated, apiE := scanRowToMap(s.db, "account", id)
+		if apiE != nil {
+			writeErr(w, apiE)
+			return
+		}
+		writeOK(w, updated)
+	case http.MethodDelete:
+		res, err := s.db.Exec("DELETE FROM account WHERE id = ?", id)
+		if err != nil {
+			writeErr(w, badRequest("could not delete account (likely referenced)", map[string]any{"sqlite": err.Error()}))
+			return
+		}
+		affected, _ := res.RowsAffected()
+		if affected == 0 {
+			writeErr(w, notFound("account not found"))
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *server) schedules(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		rows, err := s.db.Query("SELECT * FROM schedule ORDER BY is_active DESC, start_date DESC, name")
+		if err != nil {
+			writeErr(w, serverError("failed to query schedules", err))
+			return
+		}
+		defer rows.Close()
+		data, err := rowsToMaps(rows)
+		if err != nil {
+			writeErr(w, serverError("failed to read schedules", err))
+			return
+		}
+		writeOK(w, data)
+	case http.MethodPost:
+		payload, e := parseSchedulePayload(r)
+		if e != nil {
+			writeErr(w, e)
+			return
+		}
+		res, err := s.db.Exec(
+			`INSERT INTO schedule (
+			 name, kind, amount_cents, src_account_id, dest_account_id,
+			 start_date, end_date, freq, interval, bymonthday, byweekday,
+			 description, is_active
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			payload.Name, payload.Kind, payload.AmountCents, payload.SrcAccountID, payload.DestAccountID,
+			payload.StartDate, payload.EndDate, payload.Freq, payload.Interval, payload.ByMonthDay, payload.ByWeekday,
+			payload.Description, payload.IsActive,
+		)
+		if err != nil {
+			writeErr(w, badRequest("could not create schedule", map[string]any{"sqlite": err.Error()}))
+			return
+		}
+		id, _ := res.LastInsertId()
+		created, apiE := scanRowToMap(s.db, "schedule", id)
+		if apiE != nil {
+			writeErr(w, apiE)
+			return
+		}
+		writeOK(w, created)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *server) scheduleByID(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseIDFromPath("/api/schedules/", r.URL.Path)
+	if !ok {
+		writeErr(w, notFound("not found"))
+		return
+	}
+
+	switch r.Method {
+	case http.MethodPut:
+		payload, e := parseSchedulePayload(r)
+		if e != nil {
+			writeErr(w, e)
+			return
+		}
+		_, err := s.db.Exec(
+			`UPDATE schedule
+			SET name=?, kind=?, amount_cents=?, src_account_id=?, dest_account_id=?,
+			    start_date=?, end_date=?, freq=?, interval=?, bymonthday=?, byweekday=?,
+			    description=?, is_active=?
+			WHERE id=?`,
+			payload.Name, payload.Kind, payload.AmountCents, payload.SrcAccountID, payload.DestAccountID,
+			payload.StartDate, payload.EndDate, payload.Freq, payload.Interval, payload.ByMonthDay, payload.ByWeekday,
+			payload.Description, payload.IsActive, id,
+		)
+		if err != nil {
+			writeErr(w, badRequest("could not update schedule", map[string]any{"sqlite": err.Error()}))
+			return
+		}
+		updated, apiE := scanRowToMap(s.db, "schedule", id)
+		if apiE != nil {
+			writeErr(w, apiE)
+			return
+		}
+		writeOK(w, updated)
+	case http.MethodDelete:
+		res, err := s.db.Exec("DELETE FROM schedule WHERE id = ?", id)
+		if err != nil {
+			writeErr(w, badRequest("could not delete schedule", map[string]any{"sqlite": err.Error()}))
+			return
+		}
+		affected, _ := res.RowsAffected()
+		if affected == 0 {
+			writeErr(w, notFound("schedule not found"))
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *server) revisions(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		rows, err := s.db.Query(`
+			SELECT sr.*, s.name AS schedule_name
+			FROM schedule_revision sr
+			JOIN schedule s ON s.id = sr.schedule_id
+			ORDER BY sr.schedule_id, sr.effective_date
+		`)
+		if err != nil {
+			writeErr(w, serverError("failed to query revisions", err))
+			return
+		}
+		defer rows.Close()
+		data, err := rowsToMaps(rows)
+		if err != nil {
+			writeErr(w, serverError("failed to read revisions", err))
+			return
+		}
+		writeOK(w, data)
+	case http.MethodPost:
+		var body struct {
+			ScheduleID    int64   `json:"schedule_id"`
+			EffectiveDate string  `json:"effective_date"`
+			AmountCents   int64   `json:"amount_cents"`
+			Description   *string `json:"description"`
+		}
+		if e := readJSON(r, &body); e != nil {
+			writeErr(w, e)
+			return
+		}
+		if body.ScheduleID == 0 {
+			writeErr(w, badRequest("schedule_id is required", nil))
+			return
+		}
+		ed, e := requireDate(body.EffectiveDate, "effective_date")
+		if e != nil {
+			writeErr(w, e)
+			return
+		}
+		if body.AmountCents <= 0 {
+			writeErr(w, badRequest("amount_cents must be > 0", nil))
+			return
+		}
+		res, err := s.db.Exec(
+			"INSERT INTO schedule_revision (schedule_id, effective_date, amount_cents, description) VALUES (?, ?, ?, ?)",
+			body.ScheduleID, ed, body.AmountCents, body.Description,
+		)
+		if err != nil {
+			writeErr(w, badRequest("could not create revision", map[string]any{"sqlite": err.Error()}))
+			return
+		}
+		id, _ := res.LastInsertId()
+		created, apiE := scanRowToMap(s.db, "schedule_revision", id)
+		if apiE != nil {
+			writeErr(w, apiE)
+			return
+		}
+		writeOK(w, created)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *server) revisionByID(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseIDFromPath("/api/revisions/", r.URL.Path)
+	if !ok {
+		writeErr(w, notFound("not found"))
+		return
+	}
+	if r.Method != http.MethodDelete {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	res, err := s.db.Exec("DELETE FROM schedule_revision WHERE id = ?", id)
+	if err != nil {
+		writeErr(w, badRequest("could not delete revision", map[string]any{"sqlite": err.Error()}))
+		return
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		writeErr(w, notFound("revision not found"))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+func (s *server) entries(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		rows, err := s.db.Query(`
+			SELECT e.*,
+			       sa.name AS src_account_name,
+			       da.name AS dest_account_name,
+			       s.name  AS schedule_name
+			FROM entry e
+			LEFT JOIN account sa ON sa.id = e.src_account_id
+			LEFT JOIN account da ON da.id = e.dest_account_id
+			LEFT JOIN schedule s ON s.id = e.schedule_id
+			ORDER BY e.entry_date DESC, e.id DESC
+		`)
+		if err != nil {
+			writeErr(w, serverError("failed to query entries", err))
+			return
+		}
+		defer rows.Close()
+		data, err := rowsToMaps(rows)
+		if err != nil {
+			writeErr(w, serverError("failed to read entries", err))
+			return
+		}
+		writeOK(w, data)
+	case http.MethodPost:
+		var body struct {
+			EntryDate     string  `json:"entry_date"`
+			Name          string  `json:"name"`
+			AmountCents   int64   `json:"amount_cents"`
+			SrcAccountID  *int64  `json:"src_account_id"`
+			DestAccountID *int64  `json:"dest_account_id"`
+			ScheduleID    *int64  `json:"schedule_id"`
+			Description   *string `json:"description"`
+		}
+		if e := readJSON(r, &body); e != nil {
+			writeErr(w, e)
+			return
+		}
+		ed, e := requireDate(body.EntryDate, "entry_date")
+		if e != nil {
+			writeErr(w, e)
+			return
+		}
+		if strings.TrimSpace(body.Name) == "" {
+			writeErr(w, badRequest("name is required", nil))
+			return
+		}
+		if body.AmountCents <= 0 {
+			writeErr(w, badRequest("amount_cents must be > 0", nil))
+			return
+		}
+		if body.SrcAccountID == nil && body.DestAccountID == nil {
+			writeErr(w, badRequest("must set src_account_id and/or dest_account_id", nil))
+			return
+		}
+		if body.SrcAccountID != nil && body.DestAccountID != nil && *body.SrcAccountID == *body.DestAccountID {
+			writeErr(w, badRequest("src_account_id and dest_account_id must differ", nil))
+			return
+		}
+
+		res, err := s.db.Exec(
+			"INSERT INTO entry (entry_date, name, amount_cents, src_account_id, dest_account_id, description, schedule_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			ed, strings.TrimSpace(body.Name), body.AmountCents, body.SrcAccountID, body.DestAccountID, body.Description, body.ScheduleID,
+		)
+		if err != nil {
+			writeErr(w, badRequest("could not create entry", map[string]any{"sqlite": err.Error()}))
+			return
+		}
+		id, _ := res.LastInsertId()
+		created, apiE := scanRowToMap(s.db, "entry", id)
+		if apiE != nil {
+			writeErr(w, apiE)
+			return
+		}
+		writeOK(w, created)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *server) entryByID(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseIDFromPath("/api/entries/", r.URL.Path)
+	if !ok {
+		writeErr(w, notFound("not found"))
+		return
+	}
+	if r.Method != http.MethodDelete {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	res, err := s.db.Exec("DELETE FROM entry WHERE id = ?", id)
+	if err != nil {
+		writeErr(w, badRequest("could not delete entry", map[string]any{"sqlite": err.Error()}))
+		return
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		writeErr(w, notFound("entry not found"))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+func (s *server) occurrences(w http.ResponseWriter, r *http.Request) {
+	from := r.URL.Query().Get("from_date")
+	to := r.URL.Query().Get("to_date")
+	if _, e := requireDate(from, "from_date"); e != nil {
+		writeErr(w, e)
+		return
+	}
+	if _, e := requireDate(to, "to_date"); e != nil {
+		writeErr(w, e)
+		return
+	}
+
+	q := occurrenceQuery()
+	rows, err := s.db.Query(q, to, from, to)
+	if err != nil {
+		writeErr(w, serverError("failed to compute occurrences", err))
+		return
+	}
+	defer rows.Close()
+	data, err := rowsToMaps(rows)
+	if err != nil {
+		writeErr(w, serverError("failed to read occurrences", err))
+		return
+	}
+	writeOK(w, data)
+}
+
+func (s *server) balances(w http.ResponseWriter, r *http.Request) {
+	asOf := r.URL.Query().Get("as_of")
+	mode := r.URL.Query().Get("mode")
+	from := r.URL.Query().Get("from_date")
+	if mode == "" {
+		mode = "actual"
+	}
+	if _, e := requireDate(asOf, "as_of"); e != nil {
+		writeErr(w, e)
+		return
+	}
+	if mode != "actual" && mode != "projected" {
+		writeErr(w, badRequest("mode must be 'actual' or 'projected'", nil))
+		return
+	}
+
+	if mode == "actual" {
+		rows, err := s.db.Query(`
+			WITH deltas AS (
+			  SELECT d.account_id, SUM(d.delta_cents) AS delta_cents
+			  FROM v_entry_delta d
+			  JOIN account a ON a.id = d.account_id
+			  WHERE d.entry_date <= ?
+			    AND d.entry_date >= a.opening_date
+			  GROUP BY d.account_id
+			)
+			SELECT
+			  a.id,
+			  a.name,
+			  a.opening_date,
+			  a.opening_balance_cents,
+			  COALESCE(d.delta_cents, 0) AS delta_cents,
+			  a.opening_balance_cents + COALESCE(d.delta_cents, 0) AS balance_cents
+			FROM account a
+			LEFT JOIN deltas d ON d.account_id = a.id
+			WHERE a.archived_at IS NULL
+			ORDER BY a.name
+		`, asOf)
+		if err != nil {
+			writeErr(w, serverError("failed to compute balances", err))
+			return
+		}
+		defer rows.Close()
+		data, err := rowsToMaps(rows)
+		if err != nil {
+			writeErr(w, serverError("failed to read balances", err))
+			return
+		}
+		writeOK(w, data)
+		return
+	}
+
+	if _, e := requireDate(from, "from_date"); e != nil {
+		writeErr(w, e)
+		return
+	}
+
+	q := projectedBalanceQuery()
+	rows, err := s.db.Query(q, asOf, from, asOf, asOf)
+	if err != nil {
+		writeErr(w, serverError("failed to compute projected balances", err))
+		return
+	}
+	defer rows.Close()
+	data, err := rowsToMaps(rows)
+	if err != nil {
+		writeErr(w, serverError("failed to read projected balances", err))
+		return
+	}
+	writeOK(w, data)
+}
+
+type balancePoint struct {
+	ID           int64
+	Name         string
+	BalanceCents int64
+}
+
+func (s *server) actualBalancesAsOf(asOf string) ([]balancePoint, error) {
+	rows, err := s.db.Query(`
+		WITH deltas AS (
+		  SELECT d.account_id, SUM(d.delta_cents) AS delta_cents
+		  FROM v_entry_delta d
+		  JOIN account a ON a.id = d.account_id
+		  WHERE d.entry_date <= ?
+		    AND d.entry_date >= a.opening_date
+		  GROUP BY d.account_id
+		)
+		SELECT
+		  a.id,
+		  a.name,
+		  a.opening_balance_cents + COALESCE(d.delta_cents, 0) AS balance_cents
+		FROM account a
+		LEFT JOIN deltas d ON d.account_id = a.id
+		WHERE a.archived_at IS NULL
+		ORDER BY a.name
+	`, asOf)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []balancePoint
+	for rows.Next() {
+		var p balancePoint
+		if err := rows.Scan(&p.ID, &p.Name, &p.BalanceCents); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func (s *server) projectedBalancesAsOf(fromDate string, asOf string) ([]balancePoint, error) {
+	q := projectedBalanceQuery()
+	rows, err := s.db.Query(q, asOf, fromDate, asOf, asOf)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []balancePoint
+	for rows.Next() {
+		var (
+			id             int64
+			name           string
+			openingDate    string
+			openingBalance int64
+			delta          int64
+			projected      int64
+		)
+		if err := rows.Scan(&id, &name, &openingDate, &openingBalance, &delta, &projected); err != nil {
+			return nil, err
+		}
+		out = append(out, balancePoint{ID: id, Name: name, BalanceCents: projected})
+	}
+	return out, rows.Err()
+}
+
+func (s *server) balancesSeries(w http.ResponseWriter, r *http.Request) {
+	mode := r.URL.Query().Get("mode")
+	from := r.URL.Query().Get("from_date")
+	to := r.URL.Query().Get("to_date")
+	stepDaysStr := r.URL.Query().Get("step_days")
+	if mode == "" {
+		mode = "projected"
+	}
+	if mode != "actual" && mode != "projected" {
+		writeErr(w, badRequest("mode must be 'actual' or 'projected'", nil))
+		return
+	}
+	if _, e := requireDate(from, "from_date"); e != nil {
+		writeErr(w, e)
+		return
+	}
+	if _, e := requireDate(to, "to_date"); e != nil {
+		writeErr(w, e)
+		return
+	}
+
+	stepDays := 7
+	if strings.TrimSpace(stepDaysStr) != "" {
+		n, err := strconv.Atoi(stepDaysStr)
+		if err != nil {
+			writeErr(w, badRequest("step_days must be an integer", nil))
+			return
+		}
+		stepDays = n
+	}
+	if stepDays < 1 || stepDays > 366 {
+		writeErr(w, badRequest("step_days must be 1..366", nil))
+		return
+	}
+
+	fromT, err := time.Parse("2006-01-02", from)
+	if err != nil {
+		writeErr(w, badRequest("from_date must be YYYY-MM-DD", nil))
+		return
+	}
+	toT, err := time.Parse("2006-01-02", to)
+	if err != nil {
+		writeErr(w, badRequest("to_date must be YYYY-MM-DD", nil))
+		return
+	}
+	if toT.Before(fromT) {
+		writeErr(w, badRequest("to_date must be >= from_date", nil))
+		return
+	}
+
+	const maxPoints = 420
+	// Compute points (inclusive).
+	days := int(toT.Sub(fromT).Hours() / 24)
+	points := days/stepDays + 1
+	if points > maxPoints {
+		writeErr(w, badRequest("requested series is too long", map[string]any{"max_points": maxPoints, "points": points}))
+		return
+	}
+
+	type accountSeries struct {
+		ID           int64   `json:"id"`
+		Name         string  `json:"name"`
+		BalanceCents []int64 `json:"balance_cents"`
+	}
+
+	var (
+		dates      []string
+		totalCents []int64
+		accounts   []accountSeries
+		acctIndex  map[int64]int
+	)
+
+	acctIndex = make(map[int64]int)
+
+	for cur := fromT; !cur.After(toT); cur = cur.AddDate(0, 0, stepDays) {
+		asOf := cur.Format("2006-01-02")
+		dates = append(dates, asOf)
+
+		var bal []balancePoint
+		var err error
+		if mode == "actual" {
+			bal, err = s.actualBalancesAsOf(asOf)
+		} else {
+			bal, err = s.projectedBalancesAsOf(from, asOf)
+		}
+		if err != nil {
+			writeErr(w, serverError("failed to compute balances series", err))
+			return
+		}
+
+		if len(accounts) == 0 {
+			for _, p := range bal {
+				acctIndex[p.ID] = len(accounts)
+				accounts = append(accounts, accountSeries{ID: p.ID, Name: p.Name, BalanceCents: make([]int64, 0, points)})
+			}
+		}
+
+		var sum int64
+		for _, p := range bal {
+			sum += p.BalanceCents
+			idx, ok := acctIndex[p.ID]
+			if !ok {
+				// Accounts should be stable across the series; if a new one appears, append it.
+				acctIndex[p.ID] = len(accounts)
+				accounts = append(accounts, accountSeries{ID: p.ID, Name: p.Name})
+				idx = len(accounts) - 1
+				// backfill missing earlier points with zeros
+				for i := 0; i < len(dates)-1; i++ {
+					accounts[idx].BalanceCents = append(accounts[idx].BalanceCents, 0)
+				}
+			}
+			accounts[idx].BalanceCents = append(accounts[idx].BalanceCents, p.BalanceCents)
+		}
+		totalCents = append(totalCents, sum)
+
+		// Ensure every account series has a point for this date.
+		for i := range accounts {
+			if len(accounts[i].BalanceCents) < len(dates) {
+				accounts[i].BalanceCents = append(accounts[i].BalanceCents, 0)
+			}
+		}
+	}
+
+	writeOK(w, map[string]any{
+		"mode":        mode,
+		"from_date":   from,
+		"to_date":     to,
+		"step_days":   stepDays,
+		"dates":       dates,
+		"total_cents": totalCents,
+		"accounts":    accounts,
+	})
+}
+
+// --- Schedule payload parsing ---
+
+type schedulePayload struct {
+	Name          string  `json:"name"`
+	Kind          string  `json:"kind"`
+	AmountCents   int64   `json:"amount_cents"`
+	SrcAccountID  *int64  `json:"src_account_id"`
+	DestAccountID *int64  `json:"dest_account_id"`
+	StartDate     string  `json:"start_date"`
+	EndDate       *string `json:"end_date"`
+	Freq          string  `json:"freq"`
+	Interval      int64   `json:"interval"`
+	ByMonthDay    *int64  `json:"bymonthday"`
+	ByWeekday     *int64  `json:"byweekday"`
+	Description   *string `json:"description"`
+	IsActive      int64   `json:"is_active"`
+}
+
+func parseSchedulePayload(r *http.Request) (*schedulePayload, *apiErr) {
+	var p schedulePayload
+	if e := readJSON(r, &p); e != nil {
+		return nil, e
+	}
+	p.Name = strings.TrimSpace(p.Name)
+	if p.Name == "" {
+		return nil, badRequest("name is required", nil)
+	}
+	if p.Kind != "I" && p.Kind != "E" && p.Kind != "T" {
+		return nil, badRequest("kind must be one of I, E, T", nil)
+	}
+	if p.Freq != "D" && p.Freq != "W" && p.Freq != "M" && p.Freq != "Y" {
+		return nil, badRequest("freq must be one of D, W, M, Y", nil)
+	}
+	if p.AmountCents <= 0 {
+		return nil, badRequest("amount_cents must be > 0", nil)
+	}
+	if _, e := requireDate(p.StartDate, "start_date"); e != nil {
+		return nil, e
+	}
+	end, e := optionalDate(p.EndDate, "end_date")
+	if e != nil {
+		return nil, e
+	}
+	p.EndDate = end
+	if p.Interval < 1 {
+		p.Interval = 1
+	}
+	if p.ByMonthDay != nil {
+		if *p.ByMonthDay < 1 || *p.ByMonthDay > 31 {
+			return nil, badRequest("bymonthday must be 1..31", nil)
+		}
+	}
+	if p.ByWeekday != nil {
+		if *p.ByWeekday < 0 || *p.ByWeekday > 6 {
+			return nil, badRequest("byweekday must be 0..6", nil)
+		}
+	}
+	if p.IsActive != 0 {
+		p.IsActive = 1
+	}
+
+	src := p.SrcAccountID
+	dest := p.DestAccountID
+	if p.Kind == "I" {
+		if dest == nil || src != nil {
+			return nil, badRequest("Income schedules require dest_account_id and must not set src_account_id", nil)
+		}
+	}
+	if p.Kind == "E" {
+		if src == nil || dest != nil {
+			return nil, badRequest("Expense schedules require src_account_id and must not set dest_account_id", nil)
+		}
+	}
+	if p.Kind == "T" {
+		if src == nil || dest == nil || *src == *dest {
+			return nil, badRequest("Transfer schedules require distinct src_account_id and dest_account_id", nil)
+		}
+	}
+
+	return &p, nil
+}
