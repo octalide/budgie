@@ -26,6 +26,10 @@ function addDaysISO(isoDate, days) {
   return `${y}-${m}-${day}`;
 }
 
+function clamp(n, lo, hi) {
+  return Math.max(lo, Math.min(hi, n));
+}
+
 export async function viewDashboard() {
     activeNav('dashboard');
 
@@ -44,6 +48,7 @@ export async function viewDashboard() {
       showHidden: false,
       stepDays: 1,
       upcomingDays: 3,
+      lockedIdx: null,
     };
 
     const balancesRes = await api(`/api/balances?${new URLSearchParams({ mode: 'actual', as_of }).toString()}`);
@@ -77,7 +82,27 @@ export async function viewDashboard() {
         'Dashboard',
         `as-of ${as_of} • lookahead to ${to_date}`,
         `
-        <div class="split">
+        <div class="dash-top">
+          ${card(
+            'Upcoming expenses',
+            'Scheduled expenses in the next few days.',
+            `
+              <div class="table-tools table-tools--wrap" style="margin-bottom: 10px; align-items:center;">
+                <label class="chart-line" style="gap: 10px;">
+                  <span>Window</span>
+                  <select id="d_up_days">
+                    <option value="3" selected>3d</option>
+                    <option value="7">7d</option>
+                    <option value="14">14d</option>
+                  </select>
+                </label>
+              </div>
+              <div id="d_upcoming" class="dash-upcoming"></div>
+            `
+          )}
+        </div>
+
+        <div class="dash-split split">
           ${card(
               'Snapshot',
               'Current balances (actual).',
@@ -92,19 +117,9 @@ export async function viewDashboard() {
                     <input type="checkbox" id="d_show_hidden" />
                     <span>Show hidden accounts</span>
                   </label>
-                  <label class="chart-line" style="gap: 10px;">
-                    <span>Upcoming</span>
-                    <select id="d_up_days">
-                      <option value="3" selected>3d</option>
-                      <option value="7">7d</option>
-                      <option value="14">14d</option>
-                    </select>
-                  </label>
                 </div>
 
                 <div class="notice" id="d_snapshot_stats"></div>
-
-                <div id="d_upcoming" class="dash-upcoming"></div>
 
                 <div class="dash-snapshot-table" id="d_snapshot_table"></div>
               </div>
@@ -131,6 +146,7 @@ export async function viewDashboard() {
                     </select>
                   </label>
                 </div>
+                <div id="d_sel" class="dash-selection"></div>
                 <div>
                   <label>Lines</label>
                   <div id="d_lines" class="chart-lines"></div>
@@ -286,6 +302,26 @@ export async function viewDashboard() {
 
     const seriesTotalValues = () => computeTotalSeries(filteredSeriesAccounts());
 
+    const selectedIndex = () => {
+      const n = seriesData?.dates?.length || 0;
+      const idx = state.lockedIdx === null || state.lockedIdx === undefined ? 0 : Number(state.lockedIdx);
+      if (!Number.isFinite(idx) || n <= 0) return 0;
+      return clamp(Math.round(idx), 0, n - 1);
+    };
+
+    const updateSelectionLabel = () => {
+      const el = $('#d_sel');
+      if (!el) return;
+      const dates = seriesData?.dates || [];
+      const idx = selectedIndex();
+      const date = dates[idx] || as_of;
+      if (state.lockedIdx === null || state.lockedIdx === undefined) {
+        el.innerHTML = `Selection: <span class="mono">${escapeHtml(date)}</span> (timeline start — click chart to lock)`;
+      } else {
+        el.innerHTML = `Selection locked: <span class="mono">${escapeHtml(date)}</span> (Shift+click or Esc to clear)`;
+      }
+    };
+
     const redraw = () => {
         const canvas = $('#d_chart');
         if (!canvas || !seriesData) return;
@@ -326,7 +362,16 @@ export async function viewDashboard() {
             labels: seriesData.dates || [],
             series: s,
             xTicks: 4,
-          crosshair: true,
+          crosshair: {
+            lockOnClick: true,
+            lockedIndex: state.lockedIdx,
+            onLockedIndexChange: (idx) => {
+              state.lockedIdx = idx;
+              updateSelectionLabel();
+              renderToggles();
+              redraw();
+            },
+          },
         });
     };
 
@@ -341,6 +386,12 @@ export async function viewDashboard() {
         return palette.get(String(key)) || stableSeriesColor(String(key), 0.92);
       };
 
+        const idx = selectedIndex();
+        const dates = seriesData?.dates || [];
+        const date = dates[idx] || as_of;
+
+        const valText = (cents) => escapeHtml(fmtDollarsAccountingFromCents(Number(cents ?? 0)));
+
         const lines = [];
 
         lines.push(
@@ -348,17 +399,20 @@ export async function viewDashboard() {
               <input type="checkbox" data-line="total" ${selected.has('total') ? 'checked' : ''} />
               <span class="chart-swatch" style="background:${colorFor('total')}"></span>
               <span>Total</span>
+              <span class="chart-line-val mono" title="${escapeHtml(date)}">${valText(seriesTotalValues()[idx] ?? 0)}</span>
             </label>`
         );
 
         accts.forEach((a) => {
             const id = String(a.id);
             const key = `acct:${id}:${a.name || ''}`;
+            const v = (a.balance_cents || [])[idx] ?? 0;
             lines.push(
                 `<label class="chart-line">
                   <input type="checkbox" data-line="${id}" ${selected.has(id) ? 'checked' : ''} />
                   <span class="chart-swatch" style="background:${colorFor(key)}"></span>
                   <span>${a.name}</span>
+                  <span class="chart-line-val mono" title="${escapeHtml(date)}">${valText(v)}</span>
                 </label>`
             );
         });
@@ -397,6 +451,7 @@ export async function viewDashboard() {
     };
 
     renderToggles();
+    updateSelectionLabel();
     redraw();
     window.onresize = redraw;
 

@@ -7,6 +7,7 @@ import { viewRevisions } from './views/revisions.js';
 import { viewEntries } from './views/entries.js';
 import { viewProjection } from './views/projection.js';
 import { viewDashboard } from './views/dashboard.js';
+import { viewExpenses } from './views/expenses.js';
 
 export async function route() {
     const hash = location.hash || '#/accounts';
@@ -19,6 +20,7 @@ export async function route() {
         if (routeName === 'revisions') return await viewRevisions();
         if (routeName === 'entries') return await viewEntries();
         if (routeName === 'projection') return await viewProjection();
+        if (routeName === 'expenses') return await viewExpenses();
     } catch (e) {
         setStatus('bad', e.message);
         $('#page').innerHTML = card(

@@ -1,4 +1,4 @@
-import { $ } from '../js/dom.js';
+import { $, escapeHtml } from '../js/dom.js';
 import { api } from '../js/api.js';
 import { isoToday } from '../js/date.js';
 import { fmtDollarsAccountingFromCents } from '../js/money.js';
@@ -6,557 +6,497 @@ import { drawLineChart, distinctSeriesPalette, stableSeriesColor } from '../js/c
 import { activeNav, card, table, wireTableFilters } from '../js/ui.js';
 
 function addYearsISO(isoDate, years) {
-  // isoDate: YYYY-MM-DD
-  const d = new Date(`${isoDate}T00:00:00`);
-  if (!Number.isFinite(d.getTime())) return isoDate;
-  d.setFullYear(d.getFullYear() + Number(years || 0));
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+    // isoDate: YYYY-MM-DD
+    const d = new Date(`${isoDate}T00:00:00`);
+    if (!Number.isFinite(d.getTime())) return isoDate;
+    d.setFullYear(d.getFullYear() + Number(years || 0));
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
 }
 
-function isoToDayNumber(iso) {
-  // Convert YYYY-MM-DD to an integer day number (UTC-ish) for cheap comparisons.
-  const t = Date.parse(`${iso}T00:00:00Z`);
-  if (!Number.isFinite(t)) return NaN;
-  return Math.floor(t / 86400000);
-}
-
-function lowerBound(arr, x) {
-  // First index i where arr[i] >= x
-  let lo = 0;
-  let hi = arr.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (arr[mid] < x) lo = mid + 1;
-    else hi = mid;
-  }
-  return lo;
+function clamp(n, lo, hi) {
+    return Math.max(lo, Math.min(hi, n));
 }
 
 export async function viewProjection() {
     activeNav('projection');
-  const from_default = isoToday();
-  const as_of_default = addYearsISO(from_default, 1);
 
-    $('#page').innerHTML = `
-    ${card(
-        'Projection',
-        'Compute balances as-of a date (actual or projected using schedules + revisions).',
-        `
-        <div class="grid three">
-          <div>
-            <label>Mode</label>
-            <select id="p_mode">
-              <option value="projected" selected>projected</option>
-              <option value="actual">actual</option>
-            </select>
-          </div>
-          <div>
-            <label>As-of date</label>
-            <input id="p_as_of" value="${as_of_default}" />
-          </div>
-          <div>
-            <label>From date (chart/window start)</label>
-            <input id="p_from" value="${from_default}" />
-          </div>
-        </div>
-        <div class="grid three" style="margin-top: 12px;">
-          <div>
-            <label>Chart step (days)</label>
-            <input id="p_step" value="1" />
-          </div>
-          <div>
-            <label>Interest</label>
-            <label class="chart-line" style="gap: 10px; align-items:center;">
-              <input type="checkbox" id="p_inc_interest" checked />
-              <span>Include interest (projected)</span>
-            </label>
-          </div>
-          <div style="grid-column: 2 / -1;">
-            <label>Chart lines</label>
-            <div id="p_lines" class="chart-lines">
-              <div class="notice">Run to load chart lines.</div>
-            </div>
-          </div>
-        </div>
-        <div class="actions" style="margin-top: 10px;">
-          <button class="primary" id="p_run">Run</button>
-          <button id="p_occ">Show scheduled transactions (window)</button>
-        </div>
-        <div style="margin-top: 12px;" id="p_out"></div>
-      `
-    )}
-  `;
+    const from_default = isoToday();
+    const to_default = addYearsISO(from_default, 1);
 
-    let lastSeries = null;
-    let lastOcc = null;
+    const state = {
+        mode: 'projected',
+        from_date: from_default,
+        to_date: to_default,
+        stepDays: 1,
+        includeInterest: true,
+        includeLiabilities: false,
+        showHidden: false,
+        lockedIdx: null,
+    };
 
-  const moneyCell = (cents) => {
-    const n = Number(cents ?? 0);
-    const cls = n < 0 ? 'num neg mono' : n > 0 ? 'num pos mono' : 'num mono';
-    return { text: fmtDollarsAccountingFromCents(n), className: cls, title: String(cents ?? '') };
-  };
+    let acctByID = new Map();
+    let seriesData = null;
+    let occData = [];
 
-  const fixedLineColor = (key) => {
-    // Keep aggregate lines highly readable (almost-white / mint).
-    if (key === 'total') return 'hsla(210, 15%, 92%, 0.92)';
-    if (key === 'net') return 'hsla(150, 55%, 74%, 0.92)';
-    return stableSeriesColor(String(key), 0.92);
-  };
-
-  const buildLineToggles = () => {
-    const box = $('#p_lines');
-    if (!box || !lastSeries) return;
-
-    // Default: show total + all accounts.
+    // Persist line selections across refetches.
     const selected = new Set(['total', 'net']);
-    for (const a of lastSeries.accounts) selected.add(String(a.id));
 
-    const accountKeys = (lastSeries.accounts || []).map((a) => {
-      const id = String(a.id);
-      return `acct:${id}:${a.name || ''}`;
-    });
-    const palette = distinctSeriesPalette(accountKeys, 0.92, { seed: 'accounts' });
-
-    const colorFor = (key) => {
-      if (key === 'total' || key === 'net') return fixedLineColor(key);
-      return palette.get(String(key)) || stableSeriesColor(String(key), 0.92);
+    const moneyCell = (cents) => {
+        const n = Number(cents ?? 0);
+        const cls = n < 0 ? 'num neg mono' : n > 0 ? 'num pos mono' : 'num mono';
+        return { text: fmtDollarsAccountingFromCents(n), className: cls, title: String(cents ?? '') };
     };
 
-    const render = () => {
-      const lines = [];
-
-      lines.push(
-        `<label class="chart-line">
-          <input type="checkbox" data-line="total" ${selected.has('total') ? 'checked' : ''} />
-          <span class="chart-swatch" style="background:${colorFor('total')}"></span>
-          <span>Total (gross)</span>
-        </label>`
-      );
-
-      lines.push(
-        `<label class="chart-line">
-          <input type="checkbox" data-line="net" ${selected.has('net') ? 'checked' : ''} />
-          <span class="chart-swatch" style="background:${colorFor('net')}"></span>
-          <span title="gross - liabilities">Net</span>
-        </label>`
-      );
-
-      lastSeries.accounts.forEach((a) => {
-        const id = String(a.id);
-        // Include name in the key to reduce accidental collisions if ids ever overlap.
-        const key = `acct:${id}:${a.name || ''}`;
-        lines.push(
-          `<label class="chart-line">
-            <input type="checkbox" data-line="${id}" ${selected.has(id) ? 'checked' : ''} />
-            <span class="chart-swatch" style="background:${colorFor(key)}"></span>
-            <span>${a.name}</span>
-          </label>`
-        );
-      });
-
-      box.innerHTML = `
-        <div class="chart-lines-actions">
-          <button id="p_lines_all" type="button">All</button>
-          <button id="p_lines_none" type="button">None</button>
-        </div>
-        <div class="chart-lines-list">${lines.join('')}</div>
-      `;
-
-      $('#p_lines_all').onclick = () => {
-        selected.clear();
-        selected.add('total');
-        selected.add('net');
-        for (const a of lastSeries.accounts) selected.add(String(a.id));
-        render();
-        redraw();
-      };
-      $('#p_lines_none').onclick = () => {
-        selected.clear();
-        render();
-        redraw();
-      };
-
-      box.querySelectorAll('input[data-line]').forEach((inp) => {
-        inp.onchange = () => {
-          const key = inp.getAttribute('data-line');
-          if (!key) return;
-          if (inp.checked) selected.add(key);
-          else selected.delete(key);
-          redraw();
-        };
-      });
+    const acctName = (id) => {
+        if (id === null || id === undefined || id === '') return '';
+        const n = Number(id);
+        if (!Number.isFinite(n)) return '';
+        return acctByID.get(n)?.name || String(id);
     };
 
-    const getSelected = () => selected;
+    const isLiability = (r) => Number(r?.is_liability ?? 0) === 1;
+    const isHidden = (r) => Number(r?.exclude_from_dashboard ?? 0) === 1;
 
-    render();
-
-    return { getSelected, colorForKey: colorFor };
-  };
-
-  let lineState = null;
-  let expenseState = null;
-
-    const redraw = () => {
-        if (!lastSeries) return;
-        const dates = lastSeries.dates;
-
-    const selected = lineState?.getSelected ? lineState.getSelected() : new Set(['total', 'net']);
-    const series = [];
-
-    const gross = lastSeries.total_cents.map((v) => Number(v));
-    const liability = new Array(gross.length).fill(0);
-    for (const a of lastSeries.accounts || []) {
-      if (Number(a?.is_liability ?? 0) !== 1) continue;
-      const vals = a.balance_cents || [];
-      for (let i = 0; i < liability.length; i++) liability[i] += Number(vals[i] ?? 0);
-    }
-    const net = gross.map((g, i) => g - (liability[i] ?? 0));
-
-    if (selected.has('total')) {
-      series.push({
-        name: 'Total (gross)',
-        values: gross,
-        color: lineState?.colorForKey ? lineState.colorForKey('total') : fixedLineColor('total'),
-        width: 3,
-      });
-    }
-
-    if (selected.has('net')) {
-      series.push({
-        name: 'Net',
-        values: net,
-        color: lineState?.colorForKey ? lineState.colorForKey('net') : fixedLineColor('net'),
-        width: 3,
-      });
-    }
-
-    lastSeries.accounts.forEach((a) => {
-      const id = String(a.id);
-      if (!selected.has(id)) return;
-      const key = `acct:${id}:${a.name || ''}`;
-      series.push({
-        name: a.name,
-        values: a.balance_cents.map((v) => Number(v)),
-        color: lineState?.colorForKey ? lineState.colorForKey(key) : stableSeriesColor(String(key), 0.92),
-        width: 2,
-      });
-    });
-
-        const canvas = $('#p_chart');
-        if (!canvas) return;
-        drawLineChart(canvas, {
-            labels: dates,
-      series,
-            xTicks: 4,
-          crosshair: true,
+    const applyAccountFilters = (arr) =>
+        (arr || []).filter((r) => {
+            if (!state.showHidden && isHidden(r)) return false;
+            if (!state.includeLiabilities && isLiability(r)) return false;
+            return true;
         });
+
+    const selectedIndex = () => {
+        const n = seriesData?.dates?.length || 0;
+        const idx = state.lockedIdx === null || state.lockedIdx === undefined ? 0 : Number(state.lockedIdx);
+        if (!Number.isFinite(idx) || n <= 0) return 0;
+        return clamp(Math.round(idx), 0, n - 1);
     };
 
-  const renderExpenses = () => {
-    const wrap = $('#p_expenses');
-    if (!wrap) return;
-
-    if (!lastSeries || !lastOcc) {
-      wrap.innerHTML = `<div class="notice">Run to load recurring expenses.</div>`;
-      return;
-    }
-
-    const dates = lastSeries.dates || [];
-    if (dates.length === 0) {
-      wrap.innerHTML = `<div class="notice">No series dates available.</div>`;
-      return;
-    }
-
-    const dayAxis = dates.map(isoToDayNumber);
-    if (!Number.isFinite(dayAxis[0])) {
-      wrap.innerHTML = `<div class="notice">Could not parse date axis.</div>`;
-      return;
-    }
-
-    // Group occurrences by schedule (only expenses).
-    const groups = new Map();
-    for (const o of lastOcc || []) {
-      if (!o) continue;
-      if (String(o.kind || '') !== 'E') continue;
-      const sid = Number(o.schedule_id);
-      if (!Number.isFinite(sid)) continue;
-      const name = String(o.name || `Schedule #${sid}`);
-      const amt = Number(o.amount_cents ?? 0);
-      const d = String(o.occ_date || '');
-      const dn = isoToDayNumber(d);
-      if (!Number.isFinite(dn)) continue;
-      let g = groups.get(sid);
-      if (!g) {
-        g = {
-          id: sid,
-          name,
-          count: 0,
-          total: 0,
-          minDay: dn,
-          maxDay: dn,
-          minDate: d,
-          maxDate: d,
-          buckets: new Array(dates.length).fill(0),
-        };
-        groups.set(sid, g);
-      }
-      g.count++;
-      g.total += amt;
-      if (dn < g.minDay) {
-        g.minDay = dn;
-        g.minDate = d;
-      }
-      if (dn > g.maxDay) {
-        g.maxDay = dn;
-        g.maxDate = d;
-      }
-
-      // Bucket into the first visible index whose date >= occ_date.
-      let idx = lowerBound(dayAxis, dn);
-      if (idx >= dates.length) idx = dates.length - 1;
-      g.buckets[idx] += amt;
-    }
-
-    const all = Array.from(groups.values());
-    all.sort((a, b) => (b.total || 0) - (a.total || 0));
-
-    const topN = 12;
-    const shown = all.slice(0, topN);
-
-    // Build cumulative series per schedule.
-    const keys = shown.map((g) => `sched:${g.id}:${g.name}`);
-    const palette = distinctSeriesPalette(keys, 0.92, { seed: 'expenses' });
-
-    // Total spend should reflect *all* expense schedules, not just the top N.
-    const totalBucketsAll = new Array(dates.length).fill(0);
-    for (const g of all) {
-      for (let i = 0; i < totalBucketsAll.length; i++) totalBucketsAll[i] += Number(g.buckets[i] ?? 0);
-    }
-    let totRun = 0;
-    const totalCum = totalBucketsAll.map((v) => {
-      totRun += Number(v ?? 0);
-      return totRun;
-    });
-
-    for (const g of shown) {
-      let run = 0;
-      g.cum = g.buckets.map((v) => {
-        run += Number(v ?? 0);
-        return run;
-      });
-    }
-
-    // Defaults: show total + top 5 schedules.
-    const selected = new Set(['total']);
-    shown.slice(0, 5).forEach((g) => selected.add(String(g.id)));
-
-    const colorFor = (k) => {
-      if (k === 'total') return 'hsla(40, 80%, 72%, 0.92)';
-      return palette.get(String(k)) || stableSeriesColor(String(k), 0.92);
+    const fixedLineColor = (key) => {
+        if (key === 'total') return 'hsla(210, 15%, 92%, 0.92)';
+        if (key === 'net') return 'hsla(150, 55%, 74%, 0.92)';
+        return stableSeriesColor(String(key), 0.92);
     };
 
-    const redrawExpenses = () => {
-      const canvas = $('#p_exp_chart');
-      if (!canvas) return;
-      const series = [];
-      if (selected.has('total')) {
-        series.push({ name: 'Total spend', values: totalCum, color: colorFor('total'), width: 3 });
-      }
-      for (const g of shown) {
-        if (!selected.has(String(g.id))) continue;
-        const k = `sched:${g.id}:${g.name}`;
-        series.push({ name: g.name, values: g.cum || [], color: colorFor(k), width: 2 });
-      }
-      drawLineChart(canvas, { labels: dates, series, xTicks: 4, crosshair: true, formatValue: (v) => fmtDollarsAccountingFromCents(Math.round(v)) });
+    const computeTotalSeries = (accounts) => {
+        const dates = seriesData?.dates || [];
+        const out = new Array(dates.length).fill(0);
+        for (const a of accounts || []) {
+            const vals = a.balance_cents || [];
+            for (let i = 0; i < out.length; i++) out[i] += Number(vals[i] ?? 0);
+        }
+        return out;
     };
 
-    const lines = [];
-    lines.push(
-      `<label class="chart-line">
-        <input type="checkbox" data-exp-line="total" ${selected.has('total') ? 'checked' : ''} />
-        <span class="chart-swatch" style="background:${colorFor('total')}"></span>
-        <span>Total spend</span>
-      </label>`
-    );
-    shown.forEach((g) => {
-      const id = String(g.id);
-      const k = `sched:${g.id}:${g.name}`;
-      lines.push(
-        `<label class="chart-line">
-          <input type="checkbox" data-exp-line="${id}" ${selected.has(id) ? 'checked' : ''} />
-          <span class="chart-swatch" style="background:${colorFor(k)}"></span>
-          <span>${g.name}</span>
-        </label>`
-      );
-    });
+    const computeNetSeries = (accountsVisible) => {
+        // net = sum(assets) - sum(liabilities). Hidden accounts respect showHidden.
+        const dates = seriesData?.dates || [];
+        const assets = new Array(dates.length).fill(0);
+        const liab = new Array(dates.length).fill(0);
+        for (const a of accountsVisible || []) {
+            const vals = a.balance_cents || [];
+            const isL = Number(a?.is_liability ?? 0) === 1;
+            for (let i = 0; i < dates.length; i++) {
+                const v = Number(vals[i] ?? 0);
+                if (isL) liab[i] += v;
+                else assets[i] += v;
+            }
+        }
+        return assets.map((v, i) => v - (liab[i] ?? 0));
+    };
 
-    const rows = shown.map((g) => ({
-      schedule: g.name,
-      count: g.count,
-      total: { text: fmtDollarsAccountingFromCents(g.total), className: 'num mono', title: String(g.total) },
-      first: g.minDate || '',
-      last: g.maxDate || '',
-    }));
+    const updateSelectionLabel = () => {
+        const el = $('#p_sel');
+        if (!el) return;
+        const dates = seriesData?.dates || [];
+        const idx = selectedIndex();
+        const date = dates[idx] || state.from_date;
+        if (state.lockedIdx === null || state.lockedIdx === undefined) {
+            el.innerHTML = `Selection: <span class="mono">${escapeHtml(date)}</span> (timeline start - click chart to lock)`;
+        } else {
+            el.innerHTML = `Selection locked: <span class="mono">${escapeHtml(date)}</span> (Shift+click or Esc to clear)`;
+        }
 
-    wrap.innerHTML = `
+        const clearBtn = $('#p_sel_clear');
+        if (clearBtn) clearBtn.style.display = state.lockedIdx === null || state.lockedIdx === undefined ? 'none' : '';
+    };
+
+    const renderShell = () => {
+        $('#page').innerHTML = `
+      <div class="projection">
       ${card(
-        'Recurring expenses (cumulative)',
-        `Top ${shown.length} by total cost in window`,
-        `
-          <div class="table-tools table-tools--wrap" style="margin-bottom: 10px; align-items:center;">
-            <div>
+          'Projection',
+          'Timeline projection with a linked transactions view.',
+          `
+          <div class="proj-filterbar">
+            <div class="proj-filterrow table-tools table-tools--wrap" style="margin-bottom: 0;">
+              <div class="tool tool--tiny">
+                <label>Mode</label>
+                <select id="p_mode">
+                  <option value="projected" selected>projected</option>
+                  <option value="actual">actual</option>
+                </select>
+              </div>
+
+              <div class="tool tool--small">
+                <label>From</label>
+                <input id="p_from" value="${escapeHtml(state.from_date)}" />
+              </div>
+              <div class="tool tool--small">
+                <label>To</label>
+                <input id="p_to" value="${escapeHtml(state.to_date)}" />
+              </div>
+
+              <div class="tool tool--tiny">
+                <label>Granularity</label>
+                <select id="p_step">
+                  <option value="1" selected>Daily</option>
+                  <option value="7">Weekly</option>
+                  <option value="14">Biweekly</option>
+                  <option value="30">Monthly</option>
+                </select>
+              </div>
+
+              <label class="chart-line tool tool--small" style="gap:10px; align-items:center;">
+                <input type="checkbox" id="p_inc_interest" checked />
+                <span>Include interest</span>
+              </label>
+
+              <label class="chart-line tool tool--small" style="gap:10px; align-items:center;">
+                <input type="checkbox" id="p_inc_liab" />
+                <span>Include liabilities</span>
+              </label>
+
+              <label class="chart-line tool tool--small" style="gap:10px; align-items:center;">
+                <input type="checkbox" id="p_show_hidden" />
+                <span>Show hidden</span>
+              </label>
+
+              <div class="tool tool--actions">
+                <button class="primary" id="p_run" type="button">Run</button>
+              </div>
+            </div>
+
+            <div style="margin-top: 10px;">
               <label>Lines</label>
-              <div id="p_exp_lines" class="chart-lines">${lines.join('')}</div>
+              <div id="p_lines" class="chart-lines"><div class="notice">Loading…</div></div>
             </div>
           </div>
-          <canvas id="p_exp_chart" class="chart"></canvas>
-          <div style="margin-top: 12px;">
-            ${table(['schedule', 'count', 'total', 'first', 'last'], rows, null, {
-              id: 'projection-expenses',
-              filter: true,
-              filterPlaceholder: 'Filter expenses…',
-            })}
+
+          <div class="proj-split">
+            <div class="proj-chartpane">
+              <div class="proj-selection">
+                <div id="p_sel"></div>
+                <button id="p_sel_clear" type="button">Clear</button>
+              </div>
+              <canvas id="p_chart" class="chart proj-chart"></canvas>
+            </div>
+
+            <div class="proj-txnpane">
+              <div class="proj-txns-head">
+                <div>
+                  <div class="proj-txns-title">Transactions (scheduled)</div>
+                  <div class="proj-txns-sub" id="p_txns_sub"></div>
+                </div>
+              </div>
+              <div id="p_txns" class="proj-txns-body"></div>
+            </div>
           </div>
         `
       )}
+      </div>
     `;
 
-    wireTableFilters(wrap);
+        const mode = $('#p_mode');
+        const from = $('#p_from');
+        const to = $('#p_to');
+        const step = $('#p_step');
+        const interest = $('#p_inc_interest');
+        const liab = $('#p_inc_liab');
+        const hidden = $('#p_show_hidden');
+        const runBtn = $('#p_run');
+        const clearBtn = $('#p_sel_clear');
 
-    wrap.querySelectorAll('input[data-exp-line]').forEach((inp) => {
-      inp.onchange = () => {
-        const k = inp.getAttribute('data-exp-line');
-        if (!k) return;
-        if (inp.checked) selected.add(k);
-        else selected.delete(k);
-        redrawExpenses();
-      };
-    });
+        if (mode) mode.value = state.mode;
+        if (from) from.value = state.from_date;
+        if (to) to.value = state.to_date;
+        if (step) step.value = String(state.stepDays);
+        if (interest) interest.checked = state.includeInterest;
+        if (liab) liab.checked = state.includeLiabilities;
+        if (hidden) hidden.checked = state.showHidden;
 
-    expenseState = { redraw: redrawExpenses };
-    redrawExpenses();
-  };
+        const syncInterestEnabled = () => {
+            const enabled = state.mode === 'projected';
+            if (interest) interest.disabled = !enabled;
+            if (!enabled) state.includeInterest = false;
+            if (interest) interest.checked = Boolean(state.includeInterest);
+        };
+        syncInterestEnabled();
 
-    $('#p_run').onclick = async () => {
-        try {
-            const mode = $('#p_mode').value;
-            const as_of = $('#p_as_of').value;
-            const from_date = $('#p_from').value;
-        const step_days = $('#p_step').value;
-      const include_interest = Boolean($('#p_inc_interest')?.checked) && mode === 'projected';
+        mode?.addEventListener('change', () => {
+            state.mode = String(mode.value || 'projected');
+            syncInterestEnabled();
+        });
+        from?.addEventListener('change', () => (state.from_date = String(from.value || state.from_date)));
+        to?.addEventListener('change', () => (state.to_date = String(to.value || state.to_date)));
+        step?.addEventListener('change', () => {
+            const n = Number(step.value);
+            if (Number.isFinite(n) && n >= 1 && n <= 366) state.stepDays = n;
+        });
+        interest?.addEventListener('change', () => (state.includeInterest = Boolean(interest.checked)));
+        liab?.addEventListener('change', () => {
+            state.includeLiabilities = Boolean(liab.checked);
+            renderLines();
+            redrawChart();
+        });
+        hidden?.addEventListener('change', () => {
+            state.showHidden = Boolean(hidden.checked);
+            renderLines();
+            redrawChart();
+            renderTxns();
+        });
+        clearBtn?.addEventListener('click', () => {
+            state.lockedIdx = null;
+            updateSelectionLabel();
+            renderLines();
+            redrawChart();
+        });
+        runBtn?.addEventListener('click', async () => {
+            await fetchAll();
 
-            const qs = new URLSearchParams({ as_of, mode });
-            if (mode === 'projected') qs.set('from_date', from_date);
-
-            const res = await api(`/api/balances?${qs.toString()}`);
-
-            // Fetch series for charts (even for actual mode it can be useful).
-            const qsSeries = new URLSearchParams({ mode, from_date, to_date: as_of, step_days });
-            if (include_interest) qsSeries.set('include_interest', '1');
-            const series = await api(`/api/balances/series?${qsSeries.toString()}`);
-            lastSeries = series.data;
-
-            // Occurrences for recurring-expenses visualization.
-            const occ = await api(`/api/occurrences?${new URLSearchParams({ from_date, to_date: as_of }).toString()}`);
-            lastOcc = occ.data;
-
-            let lastByID = null;
-            if (include_interest && lastSeries && Array.isArray(lastSeries.accounts)) {
-              lastByID = new Map();
-              for (const a of lastSeries.accounts) {
-                const vals = a.balance_cents || [];
-                lastByID.set(Number(a.id), Number(vals[vals.length - 1] ?? 0));
-              }
+            const n = seriesData?.dates?.length || 0;
+            if (state.lockedIdx !== null && state.lockedIdx !== undefined) {
+                const idx = Number(state.lockedIdx);
+                if (!Number.isFinite(idx) || idx < 0 || idx >= n) state.lockedIdx = null;
             }
 
-            const rows = res.data.map((r) => ({
-              account: r.name,
-              opening: moneyCell(r.opening_balance_cents),
-              delta: moneyCell(r.delta_cents),
-              balance: moneyCell(
-                include_interest && lastByID ? lastByID.get(Number(r.id)) : Number(r.balance_cents ?? r.projected_balance_cents)
-              ),
-            }));
-
-            lineState = buildLineToggles();
-
-            $('#p_out').innerHTML = `
-              ${card(
-                'Chart',
-                `mode=${mode}${include_interest ? ' + interest' : ''}, ${from_date} → ${as_of} (step ${step_days || '7'}d)`,
-                `<canvas id="p_chart" class="chart"></canvas>`
-              )}
-              <div style="margin-top: 12px;">
-              ${card(
-                'Balances',
-                `mode=${mode}${include_interest ? ' + interest' : ''}`, 
-                table(['account', 'opening', 'delta', 'balance'], rows, null, {
-                  id: 'projection-balances',
-                  filter: true,
-                  filterPlaceholder: 'Filter balances…',
-                })
-              )}
-              </div>
-              <div style="margin-top: 12px;" id="p_expenses"></div>
-            `;
-
-            wireTableFilters($('#p_out'));
-            redraw();
-            renderExpenses();
-
-            // Redraw on resize.
-            window.onresize = () => {
-              redraw();
-              if (expenseState?.redraw) expenseState.redraw();
-            };
-        } catch (e) {
-            alert(e.message);
-        }
+            renderLines();
+            redrawChart();
+            renderTxns();
+            updateSelectionLabel();
+        });
     };
 
-    $('#p_occ').onclick = async () => {
-        try {
-            const from_date = $('#p_from').value;
-            const to_date = $('#p_as_of').value;
-
+    const fetchAll = async () => {
+        // Accounts for names + hidden flags.
         const accountsRes = await api('/api/accounts');
-        const acctByID = new Map((accountsRes.data || []).map((a) => [Number(a.id), a]));
-        const acctName = (id) => {
-          if (id === null || id === undefined || id === '') return '';
-          const n = Number(id);
-          if (!Number.isFinite(n)) return '';
-          return acctByID.get(n)?.name || String(id);
+        acctByID = new Map((accountsRes.data || []).map((a) => [Number(a.id), a]));
+
+        const qs = new URLSearchParams({
+            mode: state.mode,
+            from_date: state.from_date,
+            to_date: state.to_date,
+            step_days: String(state.stepDays),
+        });
+        if (state.mode === 'projected' && state.includeInterest) qs.set('include_interest', '1');
+        const seriesRes = await api(`/api/balances/series?${qs.toString()}`);
+        seriesData = seriesRes.data;
+
+        const occRes = await api(
+            `/api/occurrences?${new URLSearchParams({ from_date: state.from_date, to_date: state.to_date }).toString()}`
+        );
+        occData = (occRes.data || []).slice();
+        occData.sort((a, b) => {
+            const da = String(a?.occ_date || '');
+            const db = String(b?.occ_date || '');
+            if (da < db) return 1;
+            if (da > db) return -1;
+            const na = String(a?.name || '');
+            const nb = String(b?.name || '');
+            return na.localeCompare(nb);
+        });
+    };
+
+    const renderLines = () => {
+        const box = $('#p_lines');
+        if (!box) return;
+        if (!seriesData) {
+            box.innerHTML = `<div class="notice">Run to load lines.</div>`;
+            return;
+        }
+
+        const allAccounts = (seriesData.accounts || []).slice();
+        const visibleAccounts = allAccounts.filter((a) => (state.showHidden ? true : !isHidden(a)));
+        const includedAccounts = applyAccountFilters(allAccounts);
+
+        for (const a of allAccounts) {
+            const id = String(a.id);
+            if (!selected.has(id)) selected.add(id);
+        }
+
+        const idx = selectedIndex();
+        const dates = seriesData.dates || [];
+        const date = dates[idx] || state.from_date;
+        const valText = (cents) => escapeHtml(fmtDollarsAccountingFromCents(Number(cents ?? 0)));
+
+        const accountKeys = includedAccounts.map((a) => `acct:${String(a.id)}:${a.name || ''}`);
+        const palette = distinctSeriesPalette(accountKeys, 0.92, { seed: 'accounts' });
+        const colorFor = (key) => {
+            if (key === 'total' || key === 'net') return fixedLineColor(key);
+            return palette.get(String(key)) || stableSeriesColor(String(key), 0.92);
         };
 
-            const res = await api(
-                `/api/occurrences?from_date=${encodeURIComponent(from_date)}&to_date=${encodeURIComponent(to_date)}`
-            );
-            const rows = res.data.slice(0, 300).map((o) => ({
-                date: o.occ_date,
-                kind: o.kind,
-                name: o.name,
-              amount: moneyCell(o.amount_cents),
-          src: acctName(o.src_account_id),
-          dest: acctName(o.dest_account_id),
-            }));
+        const totalSeries = computeTotalSeries(includedAccounts);
+        const netSeries = computeNetSeries(visibleAccounts);
 
-        $('#p_out').innerHTML = card(
-          'Occurrences',
-          `Showing ${rows.length} (cap 300) from ${from_date} → ${to_date}`,
-          table(['date', 'kind', 'name', 'amount', 'src', 'dest'], rows, null, {
-            id: 'projection-occurrences',
-            filter: true,
-            filterPlaceholder: 'Filter occurrences…',
-          })
+        const lines = [];
+        lines.push(
+            `<label class="chart-line">
+              <input type="checkbox" data-line="total" ${selected.has('total') ? 'checked' : ''} />
+              <span class="chart-swatch" style="background:${colorFor('total')}"></span>
+              <span>Total</span>
+              <span class="chart-line-val mono" title="${escapeHtml(date)}">${valText(totalSeries[idx] ?? 0)}</span>
+            </label>`
+        );
+        lines.push(
+            `<label class="chart-line">
+              <input type="checkbox" data-line="net" ${selected.has('net') ? 'checked' : ''} />
+              <span class="chart-swatch" style="background:${colorFor('net')}"></span>
+              <span title="assets - liabilities">Net</span>
+              <span class="chart-line-val mono" title="${escapeHtml(date)}">${valText(netSeries[idx] ?? 0)}</span>
+            </label>`
         );
 
-        wireTableFilters($('#p_out'));
-        } catch (e) {
-            alert(e.message);
+        includedAccounts.forEach((a) => {
+            const id = String(a.id);
+            const key = `acct:${id}:${a.name || ''}`;
+            const v = (a.balance_cents || [])[idx] ?? 0;
+            lines.push(
+                `<label class="chart-line">
+                  <input type="checkbox" data-line="${id}" ${selected.has(id) ? 'checked' : ''} />
+                  <span class="chart-swatch" style="background:${colorFor(key)}"></span>
+                  <span>${a.name}</span>
+                  <span class="chart-line-val mono" title="${escapeHtml(date)}">${valText(v)}</span>
+                </label>`
+            );
+        });
+
+        box.innerHTML = `
+      <div class="chart-lines-actions">
+        <button id="p_lines_all" type="button">All</button>
+        <button id="p_lines_none" type="button">None</button>
+      </div>
+      <div class="chart-lines-list">${lines.join('')}</div>
+    `;
+
+        $('#p_lines_all').onclick = () => {
+            selected.clear();
+            selected.add('total');
+            selected.add('net');
+            for (const a of includedAccounts) selected.add(String(a.id));
+            renderLines();
+            redrawChart();
+        };
+        $('#p_lines_none').onclick = () => {
+            selected.clear();
+            renderLines();
+            redrawChart();
+        };
+
+        box.querySelectorAll('input[data-line]').forEach((inp) => {
+            inp.onchange = () => {
+                const key = inp.getAttribute('data-line');
+                if (!key) return;
+                if (inp.checked) selected.add(key);
+                else selected.delete(key);
+                redrawChart();
+            };
+        });
+    };
+
+    const redrawChart = () => {
+        const canvas = $('#p_chart');
+        if (!canvas || !seriesData) return;
+
+        const allAccounts = (seriesData.accounts || []).slice();
+        const visibleAccounts = allAccounts.filter((a) => (state.showHidden ? true : !isHidden(a)));
+        const includedAccounts = applyAccountFilters(allAccounts);
+
+        const accountKeys = includedAccounts.map((a) => `acct:${String(a.id)}:${a.name || ''}`);
+        const palette = distinctSeriesPalette(accountKeys, 0.92, { seed: 'accounts' });
+        const colorFor = (key) => {
+            if (key === 'total' || key === 'net') return fixedLineColor(key);
+            return palette.get(String(key)) || stableSeriesColor(String(key), 0.92);
+        };
+
+        const s = [];
+        const totalSeries = computeTotalSeries(includedAccounts);
+        const netSeries = computeNetSeries(visibleAccounts);
+
+        if (selected.has('total')) s.push({ name: 'Total', values: totalSeries.map((v) => Number(v)), color: colorFor('total'), width: 3 });
+        if (selected.has('net')) s.push({ name: 'Net', values: netSeries.map((v) => Number(v)), color: colorFor('net'), width: 3 });
+
+        includedAccounts.forEach((a) => {
+            const id = String(a.id);
+            if (!selected.has(id)) return;
+            const key = `acct:${id}:${a.name || ''}`;
+            s.push({ name: a.name, values: (a.balance_cents || []).map((v) => Number(v)), color: colorFor(key), width: 2 });
+        });
+
+        drawLineChart(canvas, {
+            labels: seriesData.dates || [],
+            series: s,
+            xTicks: 4,
+            crosshair: {
+                lockOnClick: true,
+                lockedIndex: state.lockedIdx,
+                onLockedIndexChange: (idx) => {
+                    state.lockedIdx = idx;
+                    updateSelectionLabel();
+                    renderLines();
+                    redrawChart();
+                },
+            },
+        });
+    };
+
+    const renderTxns = () => {
+        const box = $('#p_txns');
+        const sub = $('#p_txns_sub');
+        if (!box || !sub) return;
+
+        if (!occData || occData.length === 0) {
+            sub.textContent = `${state.from_date} → ${state.to_date}`;
+            box.innerHTML = `<div class="notice">No scheduled transactions in this window.</div>`;
+            return;
         }
+
+        const filtered = occData.filter((o) => {
+            if (state.showHidden) return true;
+            const src = o?.src_account_id;
+            const a = src === null || src === undefined ? null : acctByID.get(Number(src));
+            return a ? !Number(a?.exclude_from_dashboard ?? 0) : true;
+        });
+
+        const cap = 500;
+        const rows = filtered.slice(0, cap).map((o) => ({
+            date: o.occ_date,
+            kind: o.kind,
+            name: o.name,
+            amount: moneyCell(o.amount_cents),
+            src: acctName(o.src_account_id),
+            dest: acctName(o.dest_account_id),
+        }));
+
+        sub.textContent = `Showing ${rows.length}${filtered.length > cap ? ` of ${filtered.length}` : ''} • ${state.from_date} → ${state.to_date}`;
+        box.innerHTML = table(['date', 'kind', 'name', 'amount', 'src', 'dest'], rows, null, {
+            id: 'projection-txns',
+            filter: true,
+            filterPlaceholder: 'Filter transactions…',
+        });
+        wireTableFilters(box);
+    };
+
+    renderShell();
+    await fetchAll();
+    renderLines();
+    redrawChart();
+    renderTxns();
+    updateSelectionLabel();
+
+    window.onresize = () => {
+        redrawChart();
     };
 }
