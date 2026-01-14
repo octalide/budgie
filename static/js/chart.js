@@ -108,7 +108,19 @@ export function drawLineChart(canvas, cfg) {
     ctx.fillStyle = 'rgba(0,0,0,0.10)';
     ctx.fillRect(0, 0, w, h);
 
-    const crosshair = Boolean(cfg.crosshair);
+    const crosshairEnabled = Boolean(cfg.crosshair);
+    const crosshairCfg = typeof cfg.crosshair === 'object' && cfg.crosshair ? cfg.crosshair : null;
+    const crosshairLockOnClick = Boolean(crosshairCfg?.lockOnClick);
+    const lockedIndex =
+        crosshairCfg && (crosshairCfg.lockedIndex === null || crosshairCfg.lockedIndex === undefined)
+            ? null
+            : Number.isFinite(Number(crosshairCfg?.lockedIndex))
+              ? Number(crosshairCfg.lockedIndex)
+              : null;
+    const onLockedIndexChange = typeof crosshairCfg?.onLockedIndexChange === 'function' ? crosshairCfg.onLockedIndexChange : null;
+
+    // Cosmetic: show an affordance that the chart is interactive.
+    if (crosshairEnabled) canvas.style.cursor = crosshairLockOnClick ? 'crosshair' : 'default';
 
     // Determine min/max
     let minV = Infinity;
@@ -214,10 +226,13 @@ export function drawLineChart(canvas, cfg) {
             ctx.stroke();
         }
 
-        if (!crosshair) return;
-        if (hoverIndex === null || hoverIndex === undefined) return;
+        if (!crosshairEnabled) return;
+
+        // If a selection is locked, it should take precedence and remain visible even if the mouse leaves.
+        const idxSource = lockedIndex !== null ? lockedIndex : hoverIndex;
+        if (idxSource === null || idxSource === undefined) return;
         if (!labels || labels.length === 0) return;
-        const i = clamp(Math.round(hoverIndex), 0, labels.length - 1);
+        const i = clamp(Math.round(idxSource), 0, labels.length - 1);
         const x = xAt(i);
 
         // Crosshair line
@@ -295,10 +310,12 @@ export function drawLineChart(canvas, cfg) {
 
     render(null);
 
-    if (crosshair && labels.length > 0) {
+    if (crosshairEnabled && labels.length > 0) {
         let lastIdx = null;
 
         const onMove = (e) => {
+            // When locked, keep the crosshair fixed.
+            if (lockedIndex !== null) return;
             const r = canvas.getBoundingClientRect();
             const mx = e.clientX - r.left;
             const rel = (mx - padding.l) / Math.max(1, plotW);
@@ -309,15 +326,44 @@ export function drawLineChart(canvas, cfg) {
         };
         const onLeave = () => {
             lastIdx = null;
+            // If locked, keep rendering the locked crosshair; otherwise clear.
             render(null);
+        };
+
+        const onClick = (e) => {
+            if (!crosshairLockOnClick || !onLockedIndexChange) return;
+            const r = canvas.getBoundingClientRect();
+            const mx = e.clientX - r.left;
+            const rel = (mx - padding.l) / Math.max(1, plotW);
+            const idx = clamp(Math.round(rel * Math.max(1, labels.length - 1)), 0, labels.length - 1);
+
+            // Shift-click to clear selection.
+            if (e.shiftKey) {
+                onLockedIndexChange(null);
+                return;
+            }
+            onLockedIndexChange(idx);
+        };
+
+        // Allow Escape to clear a locked selection.
+        // Use a window handler so you don't have to keep the canvas focused.
+        const onKeyDown = (e) => {
+            if (!crosshairLockOnClick || !onLockedIndexChange) return;
+            if (e.key !== 'Escape') return;
+            if (lockedIndex === null) return;
+            onLockedIndexChange(null);
         };
 
         canvas.addEventListener('mousemove', onMove);
         canvas.addEventListener('mouseleave', onLeave);
+        canvas.addEventListener('click', onClick);
+        window.addEventListener('keydown', onKeyDown);
 
         canvas.__budgieLineChartCleanup = () => {
             canvas.removeEventListener('mousemove', onMove);
             canvas.removeEventListener('mouseleave', onLeave);
+            canvas.removeEventListener('click', onClick);
+            window.removeEventListener('keydown', onKeyDown);
         };
     }
 }
