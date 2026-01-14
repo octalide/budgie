@@ -2,7 +2,7 @@ import { $ } from '../js/dom.js';
 import { api } from '../js/api.js';
 import { isoToday } from '../js/date.js';
 import { fmtDollarsAccountingFromCents } from '../js/money.js';
-import { drawLineChart, stableSeriesColor } from '../js/chart.js';
+import { drawLineChart, distinctSeriesPalette, stableSeriesColor } from '../js/chart.js';
 import { activeNav, card, table, wireTableFilters } from '../js/ui.js';
 
 function addMonthsISO(isoDate, months) {
@@ -167,10 +167,7 @@ export async function viewDashboard() {
 
     const box = $('#d_lines');
 
-    const colorFor = (key) => {
-        if (key === 'total') return 'hsla(210, 15%, 92%, 0.92)';
-        return stableSeriesColor(String(key), 0.92);
-    };
+    const totalColor = 'hsla(210, 15%, 92%, 0.92)';
 
     const selected = new Set(['total']);
 
@@ -185,16 +182,24 @@ export async function viewDashboard() {
         const sel = selected;
         const s = [];
 
+      const accts = filteredSeriesAccounts();
+      const acctKeys = accts.map((a) => `acct:${String(a.id)}:${a.name || ''}`);
+      const palette = distinctSeriesPalette(acctKeys, 0.92, { seed: 'accounts' });
+      const colorFor = (key) => {
+        if (key === 'total') return totalColor;
+        return palette.get(String(key)) || stableSeriesColor(String(key), 0.92);
+      };
+
         if (sel.has('total')) {
             s.push({
                 name: 'Total',
             values: seriesTotalValues().map((v) => Number(v)),
-                color: colorFor('total'),
+            color: colorFor('total'),
                 width: 3,
             });
         }
 
-        filteredSeriesAccounts().forEach((a) => {
+        accts.forEach((a) => {
             const id = String(a.id);
             if (!sel.has(id)) return;
             const key = `acct:${id}:${a.name || ''}`;
@@ -216,6 +221,14 @@ export async function viewDashboard() {
     const renderToggles = () => {
         if (!box || !seriesData) return;
 
+      const accts = filteredSeriesAccounts();
+      const acctKeys = accts.map((a) => `acct:${String(a.id)}:${a.name || ''}`);
+      const palette = distinctSeriesPalette(acctKeys, 0.92, { seed: 'accounts' });
+      const colorFor = (key) => {
+        if (key === 'total') return totalColor;
+        return palette.get(String(key)) || stableSeriesColor(String(key), 0.92);
+      };
+
         const lines = [];
 
         lines.push(
@@ -226,7 +239,6 @@ export async function viewDashboard() {
             </label>`
         );
 
-        const accts = filteredSeriesAccounts();
         accts.forEach((a) => {
             const id = String(a.id);
             const key = `acct:${id}:${a.name || ''}`;

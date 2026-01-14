@@ -2,7 +2,7 @@ import { $ } from '../js/dom.js';
 import { api } from '../js/api.js';
 import { isoToday } from '../js/date.js';
 import { fmtDollarsAccountingFromCents } from '../js/money.js';
-import { drawLineChart, stableSeriesColor } from '../js/chart.js';
+import { drawLineChart, distinctSeriesPalette, stableSeriesColor } from '../js/chart.js';
 import { activeNav, card, table, wireTableFilters } from '../js/ui.js';
 
 export async function viewProjection() {
@@ -68,9 +68,10 @@ export async function viewProjection() {
     return { text: fmtDollarsAccountingFromCents(n), className: cls, title: String(cents ?? '') };
   };
 
-  const colorFor = (key) => {
-    // Keep total highly readable (almost-white), and give accounts stable vivid colors.
+  const fixedLineColor = (key) => {
+    // Keep aggregate lines highly readable (almost-white / mint).
     if (key === 'total') return 'hsla(210, 15%, 92%, 0.92)';
+    if (key === 'net') return 'hsla(150, 55%, 74%, 0.92)';
     return stableSeriesColor(String(key), 0.92);
   };
 
@@ -79,8 +80,19 @@ export async function viewProjection() {
     if (!box || !lastSeries) return;
 
     // Default: show total + all accounts.
-    const selected = new Set(['total']);
+    const selected = new Set(['total', 'net']);
     for (const a of lastSeries.accounts) selected.add(String(a.id));
+
+    const accountKeys = (lastSeries.accounts || []).map((a) => {
+      const id = String(a.id);
+      return `acct:${id}:${a.name || ''}`;
+    });
+    const palette = distinctSeriesPalette(accountKeys, 0.92, { seed: 'accounts' });
+
+    const colorFor = (key) => {
+      if (key === 'total' || key === 'net') return fixedLineColor(key);
+      return palette.get(String(key)) || stableSeriesColor(String(key), 0.92);
+    };
 
     const render = () => {
       const lines = [];
@@ -89,7 +101,15 @@ export async function viewProjection() {
         `<label class="chart-line">
           <input type="checkbox" data-line="total" ${selected.has('total') ? 'checked' : ''} />
           <span class="chart-swatch" style="background:${colorFor('total')}"></span>
-          <span>Total</span>
+          <span>Total (gross)</span>
+        </label>`
+      );
+
+      lines.push(
+        `<label class="chart-line">
+          <input type="checkbox" data-line="net" ${selected.has('net') ? 'checked' : ''} />
+          <span class="chart-swatch" style="background:${colorFor('net')}"></span>
+          <span title="gross - liabilities">Net</span>
         </label>`
       );
 
@@ -117,6 +137,7 @@ export async function viewProjection() {
       $('#p_lines_all').onclick = () => {
         selected.clear();
         selected.add('total');
+        selected.add('net');
         for (const a of lastSeries.accounts) selected.add(String(a.id));
         render();
         redraw();
@@ -151,14 +172,32 @@ export async function viewProjection() {
         if (!lastSeries) return;
         const dates = lastSeries.dates;
 
-    const selected = lineState?.getSelected ? lineState.getSelected() : new Set(['total']);
+    const selected = lineState?.getSelected ? lineState.getSelected() : new Set(['total', 'net']);
     const series = [];
+
+    const gross = lastSeries.total_cents.map((v) => Number(v));
+    const liability = new Array(gross.length).fill(0);
+    for (const a of lastSeries.accounts || []) {
+      if (Number(a?.is_liability ?? 0) !== 1) continue;
+      const vals = a.balance_cents || [];
+      for (let i = 0; i < liability.length; i++) liability[i] += Number(vals[i] ?? 0);
+    }
+    const net = gross.map((g, i) => g - (liability[i] ?? 0));
 
     if (selected.has('total')) {
       series.push({
-        name: 'Total',
-        values: lastSeries.total_cents.map((v) => Number(v)),
-        color: lineState?.colorForKey ? lineState.colorForKey('total') : colorFor('total'),
+        name: 'Total (gross)',
+        values: gross,
+        color: lineState?.colorForKey ? lineState.colorForKey('total') : fixedLineColor('total'),
+        width: 3,
+      });
+    }
+
+    if (selected.has('net')) {
+      series.push({
+        name: 'Net',
+        values: net,
+        color: lineState?.colorForKey ? lineState.colorForKey('net') : fixedLineColor('net'),
         width: 3,
       });
     }
@@ -170,7 +209,7 @@ export async function viewProjection() {
       series.push({
         name: a.name,
         values: a.balance_cents.map((v) => Number(v)),
-        color: lineState?.colorForKey ? lineState.colorForKey(key) : colorFor(key),
+        color: lineState?.colorForKey ? lineState.colorForKey(key) : stableSeriesColor(String(key), 0.92),
         width: 2,
       });
     });

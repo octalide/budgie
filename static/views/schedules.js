@@ -338,11 +338,11 @@ export async function viewSchedules() {
             end_date: s.end_date || '',
             src: acctName(s.src_account_id),
             dest: acctName(s.dest_account_id),
-            is_active: s.is_active ? '1' : '0',
+            active: { text: s.is_active ? 'Yes' : 'No', title: s.is_active ? '1' : '0' },
         }));
 
         listEl.innerHTML = table(
-            ['name', 'kind', 'freq', 'interval', 'amount', 'start_date', 'end_date', 'src', 'dest', 'is_active'],
+            ['name', 'kind', 'freq', 'interval', 'amount', 'start_date', 'end_date', 'src', 'dest', 'active'],
             viewRows,
             (r) => `
               <div class="row-actions">

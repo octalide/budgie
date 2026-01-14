@@ -22,6 +22,44 @@ export function stableSeriesColor(key, alpha = 0.92) {
     return `hsla(${h}, ${s}%, ${l}%, ${alpha})`;
 }
 
+export function distinctSeriesPalette(keys, alpha = 0.92, opts = {}) {
+    // Generate a palette that is *distinct within the provided set of keys*.
+    // This avoids the "4 shades of purple" issue that can happen with per-key hashing.
+    //
+    // Notes:
+    // - Colors are deterministic for a given set of keys.
+    // - If the set of keys changes (accounts added/removed), hues may shift.
+    const uniq = Array.from(new Set((keys || []).map((k) => String(k))));
+    const n = uniq.length;
+    const out = new Map();
+    if (n === 0) return out;
+
+    // Stable ordering regardless of input order.
+    uniq.sort((a, b) => {
+        const ha = hash32FNV1a(a);
+        const hb = hash32FNV1a(b);
+        return ha === hb ? (a < b ? -1 : a > b ? 1 : 0) : ha - hb;
+    });
+
+    // A small hue offset keeps us away from hard primaries on dark backgrounds.
+    const seed = String(opts.seed ?? 'budgie');
+    const offset = (hash32FNV1a(`palette:${seed}:${n}`) % 360) + 11;
+
+    // Cycle lightness/saturation a bit so adjacent hues remain distinguishable
+    // even when n is large.
+    const satCycle = [78, 70, 82, 66];
+    const lightCycle = [60, 52, 66, 56];
+
+    for (let i = 0; i < n; i++) {
+        const key = uniq[i];
+        const hue = (offset + (i * 360) / n) % 360;
+        const s = satCycle[i % satCycle.length];
+        const l = lightCycle[i % lightCycle.length];
+        out.set(key, `hsla(${hue.toFixed(1)}, ${s}%, ${l}%, ${alpha})`);
+    }
+    return out;
+}
+
 function clamp(n, lo, hi) {
     return Math.max(lo, Math.min(hi, n));
 }
