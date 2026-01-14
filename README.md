@@ -55,6 +55,49 @@ To bind a different port:
 
 - `PORT=8080 go run .`
 
+## Public hosting & security
+
+Budgie now supports authenticated sessions (local passwords + OIDC) so you can expose it publicly behind TLS.
+
+### TLS (encrypt FE/BE traffic)
+
+Run Budgie behind a reverse proxy (Caddy, Nginx, Traefik). For a single-host deployment, Caddy is the easiest way to get automatic HTTPS. Ensure the app only binds locally and the proxy handles TLS termination.
+
+When you terminate TLS at a proxy, set:
+
+- `BUDGIE_TRUST_PROXY=true` (use forwarded headers for scheme/host)
+- `BUDGIE_COOKIE_SECURE=true` (secure cookies)
+
+If you want Budgie to bind publicly without a proxy, set `BUDGIE_BIND=0.0.0.0:5177` and terminate TLS elsewhere (or use a VPN). Not recommended on its own.
+
+### Auth (local + OIDC + passkeys)
+
+Budgie supports:
+
+- Local accounts with salted PBKDF2-SHA256 hashes
+- OIDC sign-in (Google, Auth0, Keycloak, etc.)
+- Linking an OIDC identity to a local account
+
+Most OIDC providers now support passkeys/WebAuthn. If you enable passkeys in the provider, users can sign in using their hardware passkeys through the OIDC flow.
+
+Configure OIDC via environment variables:
+
+- `BUDGIE_OIDC_ISSUER`
+- `BUDGIE_OIDC_CLIENT_ID`
+- `BUDGIE_OIDC_CLIENT_SECRET`
+- `BUDGIE_OIDC_REDIRECT_URL` (must match the provider callback)
+- `BUDGIE_OIDC_PROVIDER_NAME` (optional label shown in the UI)
+
+Local signups are controlled via `BUDGIE_ALLOW_SIGNUP=false`. The first user can still register if no users exist (useful for bootstrapping).
+
+### Database encryption (at rest)
+
+Budgie can use SQLCipher if you provide `BUDGIE_DB_KEY`. This requires a SQLCipher-enabled SQLite build.
+
+For `github.com/mattn/go-sqlite3`, this typically means compiling with SQLCipher support and CGO enabled.
+
+If you don’t want SQLCipher, use full-disk encryption (LUKS) or store the DB on an encrypted volume.
+
 ## Data entry basics
 
 ### Accounts

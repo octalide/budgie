@@ -10,7 +10,8 @@ import (
 )
 
 type server struct {
-	db *sql.DB
+	db   *sql.DB
+	auth *AuthService
 }
 
 func (s *server) meta(w http.ResponseWriter, r *http.Request) {

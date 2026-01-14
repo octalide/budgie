@@ -25,7 +25,9 @@ func (e *apiErr) Error() string { return e.Message }
 func badRequest(msg string, details any) *apiErr {
 	return &apiErr{Status: 400, Message: msg, Details: details}
 }
-func notFound(msg string) *apiErr { return &apiErr{Status: 404, Message: msg} }
+func unauthorized(msg string) *apiErr { return &apiErr{Status: 401, Message: msg} }
+func forbidden(msg string) *apiErr    { return &apiErr{Status: 403, Message: msg} }
+func notFound(msg string) *apiErr     { return &apiErr{Status: 404, Message: msg} }
 func serverError(msg string, err error) *apiErr {
 	return &apiErr{Status: 500, Message: msg, Details: map[string]any{"error": err.Error()}}
 }

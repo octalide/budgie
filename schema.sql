@@ -207,3 +207,63 @@ LEFT JOIN v_entry_delta d
   ON d.account_id = a.id
  AND d.entry_date >= a.opening_date
 GROUP BY a.id;
+
+-- ----
+-- Auth / users
+-- ----
+CREATE TABLE IF NOT EXISTS user (
+  id            INTEGER PRIMARY KEY,
+  email         TEXT    NOT NULL UNIQUE,
+  display_name  TEXT,
+  created_at    INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+  last_login_at INTEGER,
+  disabled_at   INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS user_password (
+  user_id       INTEGER PRIMARY KEY,
+  password_hash TEXT    NOT NULL,
+  created_at    INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+  updated_at    INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+  FOREIGN KEY (user_id) REFERENCES user(id) ON UPDATE CASCADE ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS user_oidc_identity (
+  id            INTEGER PRIMARY KEY,
+  user_id       INTEGER NOT NULL,
+  issuer        TEXT    NOT NULL,
+  subject       TEXT    NOT NULL,
+  email         TEXT,
+  email_verified INTEGER NOT NULL DEFAULT 0,
+  created_at    INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+  last_login_at INTEGER,
+  UNIQUE (issuer, subject),
+  FOREIGN KEY (user_id) REFERENCES user(id) ON UPDATE CASCADE ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS auth_session (
+  id            TEXT    PRIMARY KEY,
+  user_id       INTEGER NOT NULL,
+  created_at    INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+  expires_at    INTEGER NOT NULL,
+  last_seen_at  INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+  ip            TEXT,
+  user_agent    TEXT,
+  csrf_token    TEXT    NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES user(id) ON UPDATE CASCADE ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_auth_session_user ON auth_session(user_id);
+CREATE INDEX IF NOT EXISTS idx_auth_session_expires ON auth_session(expires_at);
+
+CREATE TABLE IF NOT EXISTS oidc_state (
+  id         INTEGER PRIMARY KEY,
+  state_hash TEXT    NOT NULL UNIQUE,
+  nonce      TEXT    NOT NULL,
+  purpose    TEXT    NOT NULL,
+  user_id    INTEGER,
+  created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+  FOREIGN KEY (user_id) REFERENCES user(id) ON UPDATE CASCADE ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_oidc_state_created ON oidc_state(created_at);

@@ -291,9 +291,17 @@ export async function viewDashboard() {
 
     const totalColor = 'hsla(210, 15%, 92%, 0.92)';
 
-    const selected = new Set(['total']);
+    const selected = new Set();
 
     const filteredSeriesAccounts = () => applyAccountFilters(seriesData?.accounts || []);
+
+    const selectAllLines = () => {
+      selected.clear();
+      selected.add('total');
+      for (const a of filteredSeriesAccounts()) {
+        selected.add(String(a.id));
+      }
+    };
 
     const seriesTotalValues = () => computeTotalSeries(filteredSeriesAccounts());
 
@@ -445,6 +453,7 @@ export async function viewDashboard() {
         });
     };
 
+    selectAllLines();
     renderToggles();
     updateSelectionLabel();
     redraw();

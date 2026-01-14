@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -18,6 +19,17 @@ func main() {
 	}
 	defer db.Close()
 
+	authCfg, err := budgie.LoadAuthConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to load auth config: %v\n", err)
+		os.Exit(1)
+	}
+	authSvc, err := budgie.NewAuthService(context.Background(), db, authCfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to initialize auth: %v\n", err)
+		os.Exit(1)
+	}
+
 	mux := http.NewServeMux()
 
 	// UI
@@ -31,15 +43,19 @@ func main() {
 	})
 
 	// API
-	budgie.RegisterAPI(mux, db)
+	budgie.RegisterAPI(mux, db, authSvc)
 
 	addr := "127.0.0.1:5177"
-	if p := strings.TrimSpace(os.Getenv("PORT")); p != "" {
+	if bind := strings.TrimSpace(os.Getenv("BUDGIE_BIND")); bind != "" {
+		addr = bind
+	} else if p := strings.TrimSpace(os.Getenv("PORT")); p != "" {
 		addr = "127.0.0.1:" + p
 	}
 
+	handler := budgie.WithSecurityHeaders(mux, authSvc)
+
 	fmt.Printf("budgie listening on http://%s (db=%s)\n", addr, budgie.DBPath())
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	if err := http.ListenAndServe(addr, handler); err != nil {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 		os.Exit(1)
 	}

@@ -2,7 +2,6 @@ package budgie
 
 import (
 	"database/sql"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,16 +20,6 @@ func DBPath() string {
 }
 
 func ensureSchema(db *sql.DB) error {
-	var name string
-	err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='account'").Scan(&name)
-	if err == nil {
-		return nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		// Some drivers return ErrNoRows, some return scan error; handle by checking table existence differently.
-		// We'll just proceed to try to load schema if scan failed.
-	}
-
 	schemaBytes, err := os.ReadFile("schema.sql")
 	if err != nil {
 		return err
@@ -51,6 +40,12 @@ func OpenDB() (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	if key := strings.TrimSpace(os.Getenv("BUDGIE_DB_KEY")); key != "" {
+		if err := applyDBKey(db, key); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+	}
 	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -60,4 +55,19 @@ func OpenDB() (*sql.DB, error) {
 		return nil, err
 	}
 	return db, nil
+}
+
+func applyDBKey(db *sql.DB, key string) error {
+	// SQLCipher expects PRAGMA key to be called before any other statements.
+	// Note: This requires a SQLCipher-enabled SQLite build.
+	escaped := strings.ReplaceAll(key, "'", "''")
+	if _, err := db.Exec("PRAGMA key = '" + escaped + "'"); err != nil {
+		return err
+	}
+	// Sanity check: force decryption attempt.
+	var count int
+	if err := db.QueryRow("SELECT count(*) FROM sqlite_master").Scan(&count); err != nil {
+		return err
+	}
+	return nil
 }
