@@ -82,49 +82,53 @@ export async function viewDashboard() {
         'Dashboard',
         `as-of ${as_of} • lookahead to ${to_date}`,
         `
-        <div class="dash-top">
-          ${card(
-            'Upcoming expenses',
-            'Scheduled expenses in the next few days.',
-            `
-              <div class="table-tools table-tools--wrap" style="margin-bottom: 10px; align-items:center;">
-                <label class="chart-line" style="gap: 10px;">
-                  <span>Window</span>
-                  <select id="d_up_days">
-                    <option value="3" selected>3d</option>
-                    <option value="7">7d</option>
-                    <option value="14">14d</option>
-                  </select>
-                </label>
-              </div>
-              <div id="d_upcoming" class="dash-upcoming"></div>
-            `
-          )}
-        </div>
-
         <div class="dash-split split">
-          ${card(
-              'Snapshot',
-              'Current balances (actual).',
-              `
-              <div class="dash-snapshot">
-                <div class="table-tools table-tools--wrap" style="margin-bottom: 10px;">
-                  <label class="chart-line" style="gap: 10px;">
-                    <input type="checkbox" id="d_inc_liab" />
-                    <span>Include liabilities</span>
-                  </label>
-                  <label class="chart-line" style="gap: 10px;">
-                    <input type="checkbox" id="d_show_hidden" />
-                    <span>Show hidden accounts</span>
-                  </label>
-                </div>
+          <div class="dash-left">
+            <div class="dash-left-upcoming">
+              ${card(
+                'Upcoming expenses',
+                'Scheduled expenses in the next few days.',
+                `
+                  <div class="table-tools table-tools--wrap" style="margin-bottom: 10px; align-items:center;">
+                    <label class="chart-line" style="gap: 10px;">
+                      <span>Window</span>
+                      <select id="d_up_days">
+                        <option value="3" selected>3d</option>
+                        <option value="7">7d</option>
+                        <option value="14">14d</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div id="d_upcoming" class="dash-upcoming"></div>
+                `
+              )}
+            </div>
 
-                <div class="notice" id="d_snapshot_stats"></div>
+            <div class="dash-left-snapshot">
+              ${card(
+                  'Snapshot',
+                  'Current balances (actual).',
+                  `
+                  <div class="dash-snapshot">
+                    <div class="table-tools table-tools--wrap" style="margin-bottom: 10px;">
+                      <label class="chart-line" style="gap: 10px;">
+                        <input type="checkbox" id="d_inc_liab" />
+                        <span>Include liabilities</span>
+                      </label>
+                      <label class="chart-line" style="gap: 10px;">
+                        <input type="checkbox" id="d_show_hidden" />
+                        <span>Show hidden accounts</span>
+                      </label>
+                    </div>
 
-                <div class="dash-snapshot-table" id="d_snapshot_table"></div>
-              </div>
-            `
-          )}
+                    <div class="notice" id="d_snapshot_stats"></div>
+
+                    <div class="dash-snapshot-table" id="d_snapshot_table"></div>
+                  </div>
+                `
+              )}
+            </div>
+          </div>
 
           ${card(
               'Next 6 months',

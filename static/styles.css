@@ -30,6 +30,9 @@ body {
     color: var(--text);
     font-family: var(--font);
     font-variant-ligatures: none;
+    /* Clamp the app to the viewport; scrolling should happen inside panes/tables, not the page. */
+    overflow: hidden;
+    overscroll-behavior: none;
 }
 
 a {
@@ -38,9 +41,10 @@ a {
 }
 
 .app {
-    min-height: 100vh;
+    height: 100vh;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
 }
 
 .topbar {
@@ -85,12 +89,16 @@ a {
     display: grid;
     grid-template-columns: 220px 1fr;
     flex: 1;
+    min-height: 0;
+    overflow: hidden;
 }
 
 .sidebar {
     border-right: 1px solid var(--border);
     background: rgba(0, 0, 0, 0.12);
     padding: 10px;
+    overflow: auto;
+    min-height: 0;
 }
 
 .navlink {
@@ -117,11 +125,66 @@ a {
     display: flex;
     flex-direction: column;
     min-height: 0;
+    overflow: hidden;
 }
 
 .page {
     flex: 1;
     min-height: 0;
+    height: 100%;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+/* View wrappers rendered directly into #page should participate in the page flex layout. */
+.page > .dashboard,
+.page > .projection,
+.page > .expenses {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Default full-height page card behavior: keep the page itself unscrollable and
+   let tables (and other overflow containers) scroll inside the card. */
+.page > .card {
+    flex: 1;
+    min-height: 0;
+}
+
+.page > .card > .card__body {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.page > .card > .card__body .table-tools {
+    flex: 0 0 auto;
+}
+
+.page > .card > .card__body .table-wrap {
+    flex: 1;
+    min-height: 0;
+    max-height: none;
+}
+
+/* Pages that render their table into an explicit container (Schedules). */
+#schedules_table {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+#schedules_table .table-wrap {
+    flex: 1;
+    min-height: 0;
+    max-height: none;
 }
 
 .table-tools {
@@ -239,22 +302,12 @@ a {
     flex: 1;
     min-height: 0;
     overflow: hidden;
-}
-
-.dashboard .dash-top {
-    margin-bottom: 10px;
-    flex: 0 0 auto;
-}
-
-.dashboard .dash-top > .card {
-    height: auto;
-}
-
-.dashboard .dash-top > .card > .card__body {
-    overflow: hidden;
+    display: flex;
+    flex-direction: column;
 }
 
 .dashboard .dash-split {
+    flex: 1;
     height: 100%;
     min-height: 0;
 }
@@ -265,6 +318,50 @@ a {
 }
 
 .dashboard .dash-split > .card > .card__body {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.dashboard .dash-left {
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.dashboard .dash-left-upcoming {
+    flex: 0 0 auto;
+    height: clamp(160px, 24vh, 260px);
+    min-height: 140px;
+}
+
+.dashboard .dash-left-upcoming > .card {
+    height: 100%;
+    min-height: 0;
+}
+
+.dashboard .dash-left-upcoming > .card > .card__body {
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.dashboard .dash-left-snapshot {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+}
+
+.dashboard .dash-left-snapshot > .card {
+    flex: 1;
+    min-height: 0;
+}
+
+.dashboard .dash-left-snapshot > .card > .card__body {
     flex: 1;
     min-height: 0;
     overflow: hidden;
@@ -290,6 +387,15 @@ a {
     border: 1px solid var(--border);
     background: rgba(0, 0, 0, 0.10);
     padding: 10px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+/* When Upcoming is inside a fixed-height card body, fill the remaining space so
+   the list can scroll instead of growing the page. */
+.dashboard .dash-left-upcoming .dash-upcoming {
+    flex: 1;
 }
 
 .dash-upcoming-head {
@@ -320,7 +426,8 @@ a {
 .dash-upcoming-list {
     display: grid;
     gap: 6px;
-    max-height: 148px;
+    flex: 1;
+    min-height: 0;
     overflow: auto;
 }
 
@@ -478,6 +585,10 @@ a {
     padding: 10px;
     display: flex;
     flex-direction: column;
+}
+
+.proj-txns-body .table-tools {
+    flex: 0 0 auto;
 }
 
 .proj-txns-body .table-wrap {
@@ -825,8 +936,11 @@ button.danger {
 .split {
     display: grid;
     gap: 12px;
-    align-items: start;
+    /* Stretch grid items so their internal flex layouts can compute a real height,
+       enabling table/pane scrolling without the overall page growing. */
+    align-items: stretch;
     grid-template-columns: minmax(320px, 1fr) 2fr;
+    min-height: 0;
 }
 
 @media (max-width: 900px) {
