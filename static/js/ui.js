@@ -1,5 +1,70 @@
 import { $$ } from './dom.js';
 
+let _activeModalBackdrop = null;
+let _activeModalKeyHandler = null;
+
+export function showModal({ title, subtitle, bodyHtml }) {
+  // Ensure only one modal at a time.
+  if (_activeModalBackdrop) {
+    _activeModalBackdrop.remove();
+    _activeModalBackdrop = null;
+  }
+  if (_activeModalKeyHandler) {
+    window.removeEventListener('keydown', _activeModalKeyHandler);
+    _activeModalKeyHandler = null;
+  }
+
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="modal__head">
+        <div>
+          <div class="modal__title">${title || ''}</div>
+          ${subtitle ? `<div class="modal__subtitle">${subtitle}</div>` : ''}
+        </div>
+        <button class="modal__close" type="button" aria-label="Close">×</button>
+      </div>
+      <div class="modal__body">${bodyHtml || ''}</div>
+    </div>
+  `;
+
+  const close = () => {
+    if (_activeModalKeyHandler) {
+      window.removeEventListener('keydown', _activeModalKeyHandler);
+      _activeModalKeyHandler = null;
+    }
+    if (_activeModalBackdrop) {
+      _activeModalBackdrop.remove();
+      _activeModalBackdrop = null;
+    }
+  };
+
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) close();
+  });
+
+  const closeBtn = backdrop.querySelector('.modal__close');
+  if (closeBtn) closeBtn.addEventListener('click', close);
+
+  _activeModalKeyHandler = (e) => {
+    if (e.key === 'Escape') close();
+  };
+  window.addEventListener('keydown', _activeModalKeyHandler);
+
+  document.body.appendChild(backdrop);
+  _activeModalBackdrop = backdrop;
+
+  // Focus the first field for quick data entry.
+  const first = backdrop.querySelector('input, select, textarea, button');
+  if (first && first.focus) first.focus();
+
+  return {
+    root: backdrop,
+    close,
+  };
+}
+
 export function activeNav(route) {
     $$('.navlink').forEach((a) => a.classList.toggle('active', a.dataset.route === route));
 }

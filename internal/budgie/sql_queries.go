@@ -183,7 +183,12 @@ SELECT
 	a.opening_date,
 	a.opening_balance_cents,
 	COALESCE(d.delta_cents, 0) AS delta_cents,
-	a.opening_balance_cents + COALESCE(d.delta_cents, 0) AS projected_balance_cents
+	a.opening_balance_cents + COALESCE(d.delta_cents, 0) AS projected_balance_cents,
+	a.is_liability,
+	a.is_interest_bearing,
+	a.interest_apr_bps,
+	a.interest_compound,
+	a.exclude_from_dashboard
 FROM account a
 LEFT JOIN all_deltas d ON d.account_id = a.id
 WHERE a.archived_at IS NULL

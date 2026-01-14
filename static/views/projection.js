@@ -37,6 +37,13 @@ export async function viewProjection() {
             <label>Chart step (days)</label>
             <input id="p_step" value="7" />
           </div>
+          <div>
+            <label>Interest</label>
+            <label class="chart-line" style="gap: 10px; align-items:center;">
+              <input type="checkbox" id="p_inc_interest" checked />
+              <span>Include interest (projected)</span>
+            </label>
+          </div>
           <div style="grid-column: 2 / -1;">
             <label>Chart lines</label>
             <div id="p_lines" class="chart-lines">
@@ -183,35 +190,49 @@ export async function viewProjection() {
             const as_of = $('#p_as_of').value;
             const from_date = $('#p_from').value;
         const step_days = $('#p_step').value;
+      const include_interest = Boolean($('#p_inc_interest')?.checked) && mode === 'projected';
 
             const qs = new URLSearchParams({ as_of, mode });
             if (mode === 'projected') qs.set('from_date', from_date);
 
             const res = await api(`/api/balances?${qs.toString()}`);
-            const rows = res.data.map((r) => ({
-                account: r.name,
-              opening: moneyCell(r.opening_balance_cents),
-              delta: moneyCell(r.delta_cents),
-              balance: moneyCell(r.balance_cents ?? r.projected_balance_cents),
-            }));
 
             // Fetch series for charts (even for actual mode it can be useful).
             const qsSeries = new URLSearchParams({ mode, from_date, to_date: as_of, step_days });
+            if (include_interest) qsSeries.set('include_interest', '1');
             const series = await api(`/api/balances/series?${qsSeries.toString()}`);
             lastSeries = series.data;
+
+            let lastByID = null;
+            if (include_interest && lastSeries && Array.isArray(lastSeries.accounts)) {
+              lastByID = new Map();
+              for (const a of lastSeries.accounts) {
+                const vals = a.balance_cents || [];
+                lastByID.set(Number(a.id), Number(vals[vals.length - 1] ?? 0));
+              }
+            }
+
+            const rows = res.data.map((r) => ({
+              account: r.name,
+              opening: moneyCell(r.opening_balance_cents),
+              delta: moneyCell(r.delta_cents),
+              balance: moneyCell(
+                include_interest && lastByID ? lastByID.get(Number(r.id)) : Number(r.balance_cents ?? r.projected_balance_cents)
+              ),
+            }));
 
             lineState = buildLineToggles();
 
             $('#p_out').innerHTML = `
               ${card(
                 'Chart',
-                `mode=${mode}, ${from_date} → ${as_of} (step ${step_days || '7'}d)`,
+                `mode=${mode}${include_interest ? ' + interest' : ''}, ${from_date} → ${as_of} (step ${step_days || '7'}d)`,
                 `<canvas id="p_chart" class="chart"></canvas>`
               )}
               <div style="margin-top: 12px;">
               ${card(
                 'Balances',
-                `mode=${mode}`, 
+                `mode=${mode}${include_interest ? ' + interest' : ''}`, 
                 table(['account', 'opening', 'delta', 'balance'], rows, null, {
                   id: 'projection-balances',
                   filter: true,

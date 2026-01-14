@@ -2,7 +2,7 @@ import { $, $$, escapeHtml } from '../js/dom.js';
 import { api } from '../js/api.js';
 import { isoToday } from '../js/date.js';
 import { fmtDollarsFromCents, parseCentsFromDollarsString } from '../js/money.js';
-import { activeNav, card, table, wireTableFilters } from '../js/ui.js';
+import { activeNav, card, showModal, table, wireTableFilters } from '../js/ui.js';
 
 export async function viewRevisions() {
     activeNav('revisions');
@@ -22,76 +22,84 @@ export async function viewRevisions() {
         description: r.description || '',
     }));
 
-    $('#page').innerHTML = `
-    <div class="split">
-      ${card(
-        'Add revision',
-        'Overrides a schedule amount starting on effective_date (inclusive).',
-        `
-          <div class="grid two">
-            <div>
-              <label>Schedule</label>
-              <select id="r_schedule">${schedOpts}</select>
-            </div>
-            <div>
-              <label>Effective date</label>
-              <input id="r_date" value="${isoToday()}" />
-            </div>
-            <div>
-              <label>Amount ($)</label>
-              <input id="r_amount" placeholder="0.00" />
-            </div>
-            <div>
-              <label>Description</label>
-              <input id="r_desc" placeholder="" />
-            </div>
-          </div>
-          <div class="actions" style="margin-top:10px;">
-            <button class="primary" id="r_create">Create</button>
-          </div>
-        `
-    )}
-
-      ${card(
+    $('#page').innerHTML = card(
         'Revisions',
         `${rows.length} total`,
-        table(
-            // ['id', 'schedule_name', 'effective_date', 'amount', 'description'],
-            ['schedule_name', 'effective_date', 'amount', 'description'],
-            rows,
-            (r) => `
-            <div class="row-actions">
-              <button class="danger" data-del-rev="${r.id}">Delete</button>
-            </div>
-          `,
-            { id: 'revisions', filter: true, filterPlaceholder: 'Filter revisions…' }
-        )
-    )}
-    </div>
-  `;
+        `
+          <div class="actions" style="margin-bottom: 10px;">
+            <button class="primary" id="r_add">Add revision</button>
+          </div>
+          ${table(
+              ['schedule_name', 'effective_date', 'amount', 'description'],
+              rows,
+              (r) => `
+                <div class="row-actions">
+                  <button class="danger" data-del-rev="${r.id}">Delete</button>
+                </div>
+              `,
+              { id: 'revisions', filter: true, filterPlaceholder: 'Filter revisions…' }
+          )}
+        `
+    );
 
     wireTableFilters($('#page'));
 
-    $('#r_create').onclick = async () => {
-        try {
-            const amount_cents = parseCentsFromDollarsString($('#r_amount').value);
-            if (amount_cents === null) throw new Error('Amount is required');
+    const revisionModalHtml = () => `
+      <div class="grid two">
+        <div>
+          <label>Schedule</label>
+          <select id="rm_schedule">${schedOpts}</select>
+        </div>
+        <div>
+          <label>Effective date</label>
+          <input id="rm_date" value="${isoToday()}" />
+        </div>
+        <div>
+          <label>Amount ($)</label>
+          <input id="rm_amount" placeholder="0.00" />
+        </div>
+        <div>
+          <label>Description</label>
+          <input id="rm_desc" placeholder="" />
+        </div>
+      </div>
+      <div class="actions" style="margin-top:10px;">
+        <button class="primary" id="rm_create">Create</button>
+      </div>
+    `;
 
-            await api('/api/revisions', {
-                method: 'POST',
-                body: JSON.stringify({
-                    schedule_id: Number($('#r_schedule').value),
-                    effective_date: $('#r_date').value,
-                    amount_cents,
-                    description: $('#r_desc').value || null,
-                }),
-            });
+    const showRevisionModal = () => {
+        const { root, close } = showModal({
+            title: 'Add revision',
+            subtitle: 'Overrides a schedule amount starting on effective_date (inclusive).',
+            bodyHtml: revisionModalHtml(),
+        });
 
-            location.hash = '#/revisions';
-        } catch (e) {
-            alert(e.message);
-        }
+        const modal = root.querySelector('.modal');
+        modal.querySelector('#rm_create').onclick = async () => {
+            try {
+                const amount_cents = parseCentsFromDollarsString(modal.querySelector('#rm_amount').value);
+                if (amount_cents === null) throw new Error('Amount is required');
+
+                await api('/api/revisions', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        schedule_id: Number(modal.querySelector('#rm_schedule').value),
+                        effective_date: modal.querySelector('#rm_date').value,
+                        amount_cents,
+                        description: modal.querySelector('#rm_desc').value || null,
+                    }),
+                });
+
+                close();
+                location.hash = '#/revisions';
+            } catch (e) {
+                alert(e.message);
+            }
+        };
     };
+
+    $('#r_add').onclick = showRevisionModal;
 
     $$('#page [data-del-rev]').forEach((btn) => {
         btn.onclick = async () => {

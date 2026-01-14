@@ -17,7 +17,21 @@ CREATE TABLE IF NOT EXISTS account (
   description          TEXT,
   archived_at          TEXT, -- NULL = active; otherwise ISO date/time
 
-  CHECK (opening_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]')
+  -- Account metadata
+  -- Loans/credit cards are typically liabilities (their balances are often negative).
+  -- Interest-bearing accounts can accrue interest in projections.
+  is_liability          INTEGER NOT NULL DEFAULT 0,
+  is_interest_bearing   INTEGER NOT NULL DEFAULT 0,
+  interest_apr_bps      INTEGER,                 -- APR in basis points (18.99% -> 1899)
+  interest_compound     TEXT    NOT NULL DEFAULT 'D', -- 'D' daily (default) | 'M' monthly
+  exclude_from_dashboard INTEGER NOT NULL DEFAULT 0,
+
+  CHECK (opening_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+  CHECK (is_liability IN (0, 1)),
+  CHECK (is_interest_bearing IN (0, 1)),
+  CHECK (interest_apr_bps IS NULL OR interest_apr_bps >= 0),
+  CHECK (interest_compound IN ('D', 'M')),
+  CHECK (exclude_from_dashboard IN (0, 1))
 );
 
 CREATE INDEX IF NOT EXISTS idx_account_archived_at ON account(archived_at);

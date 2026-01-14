@@ -28,23 +28,28 @@ export async function viewDashboard() {
         return { text: fmtDollarsAccountingFromCents(n), className: cls, title: String(cents ?? '') };
     };
 
-    // Fetch snapshot + 6 month series.
-    const [balancesRes, seriesRes] = await Promise.all([
-        api(`/api/balances?${new URLSearchParams({ mode: 'actual', as_of }).toString()}`),
-        api(
-            `/api/balances/series?${new URLSearchParams({
-                mode: 'projected',
-                from_date: as_of,
-                to_date,
-                step_days: '7',
-            }).toString()}`
-        ),
-    ]);
+    const state = {
+      includeLiabilities: false,
+      includeInterest: true,
+      showHidden: false,
+    };
 
-    const balances = balancesRes.data || [];
-    const seriesData = seriesRes.data;
+    const balancesRes = await api(`/api/balances?${new URLSearchParams({ mode: 'actual', as_of }).toString()}`);
+    const balancesAll = balancesRes.data || [];
 
-    const netWorthCents = balances.reduce((acc, r) => acc + Number(r.balance_cents ?? 0), 0);
+    const fetchSeries = async () => {
+      const qs = new URLSearchParams({
+        mode: 'projected',
+        from_date: as_of,
+        to_date,
+        step_days: '7',
+      });
+      if (state.includeInterest) qs.set('include_interest', '1');
+      const seriesRes = await api(`/api/balances/series?${qs.toString()}`);
+      return seriesRes.data;
+    };
+
+    let seriesData = await fetchSeries();
 
     $('#page').innerHTML = `
     <div class="dashboard">
@@ -58,36 +63,20 @@ export async function viewDashboard() {
               'Current balances (actual).',
               `
               <div class="dash-snapshot">
-                <div class="notice">
-                  <div style="display:flex; justify-content:space-between; gap:12px;">
-                    <div>
-                      <div style="font-size:12px; color: var(--muted);">Net worth</div>
-                      <div class="mono" style="font-size:18px; margin-top:4px;">${fmtDollarsAccountingFromCents(netWorthCents)}</div>
-                    </div>
-                    <div style="text-align:right;">
-                      <div style="font-size:12px; color: var(--muted);">Accounts</div>
-                      <div class="mono" style="font-size:18px; margin-top:4px;">${balances.length}</div>
-                    </div>
-                  </div>
+                <div class="table-tools table-tools--wrap" style="margin-bottom: 10px;">
+                  <label class="chart-line" style="gap: 10px;">
+                    <input type="checkbox" id="d_inc_liab" />
+                    <span>Include liabilities</span>
+                  </label>
+                  <label class="chart-line" style="gap: 10px;">
+                    <input type="checkbox" id="d_show_hidden" />
+                    <span>Show hidden accounts</span>
+                  </label>
                 </div>
 
-                <div class="dash-snapshot-table">
-                  ${table(
-                      ['account', 'opening', 'delta', 'balance'],
-                      balances.map((r) => ({
-                          account: r.name,
-                          opening: moneyCell(r.opening_balance_cents),
-                          delta: moneyCell(r.delta_cents),
-                          balance: moneyCell(r.balance_cents),
-                      })),
-                      null,
-                      {
-                          id: 'dashboard-balances',
-                          filter: true,
-                          filterPlaceholder: 'Filter accounts…',
-                      }
-                  )}
-                </div>
+                <div class="notice" id="d_snapshot_stats"></div>
+
+                <div class="dash-snapshot-table" id="d_snapshot_table"></div>
               </div>
             `
           )}
@@ -97,6 +86,12 @@ export async function viewDashboard() {
               'Projected total (and optional per-account lines).',
               `
               <div class="dash-projection">
+                <div class="table-tools table-tools--wrap" style="margin-bottom: 10px;">
+                  <label class="chart-line" style="gap: 10px;">
+                    <input type="checkbox" id="d_inc_interest" checked />
+                    <span>Include interest</span>
+                  </label>
+                </div>
                 <div>
                   <label>Lines</label>
                   <div id="d_lines" class="chart-lines"></div>
@@ -114,7 +109,61 @@ export async function viewDashboard() {
     </div>
   `;
 
-    wireTableFilters($('#page'));
+    const isLiability = (r) => Number(r?.is_liability ?? 0) === 1;
+    const isHidden = (r) => Number(r?.exclude_from_dashboard ?? 0) === 1;
+
+    const applyAccountFilters = (arr) =>
+        (arr || []).filter((r) => {
+            if (!state.showHidden && isHidden(r)) return false;
+            if (!state.includeLiabilities && isLiability(r)) return false;
+            return true;
+        });
+
+    const computeTotalSeries = (accounts) => {
+        const dates = seriesData?.dates || [];
+        const out = new Array(dates.length).fill(0);
+        for (const a of accounts || []) {
+            const vals = a.balance_cents || [];
+            for (let i = 0; i < out.length; i++) out[i] += Number(vals[i] ?? 0);
+        }
+        return out;
+    };
+
+    const renderSnapshot = () => {
+        const balances = applyAccountFilters(balancesAll);
+        const netWorthCents = balances.reduce((acc, r) => acc + Number(r.balance_cents ?? 0), 0);
+
+        $('#d_snapshot_stats').innerHTML = `
+          <div style="display:flex; justify-content:space-between; gap:12px;">
+            <div>
+              <div style="font-size:12px; color: var(--muted);">Net worth</div>
+              <div class="mono" style="font-size:18px; margin-top:4px;">${fmtDollarsAccountingFromCents(netWorthCents)}</div>
+            </div>
+            <div style="text-align:right;">
+              <div style="font-size:12px; color: var(--muted);">Accounts</div>
+              <div class="mono" style="font-size:18px; margin-top:4px;">${balances.length}</div>
+            </div>
+          </div>
+        `;
+
+        $('#d_snapshot_table').innerHTML = table(
+            ['account', 'opening', 'delta', 'balance'],
+            balances.map((r) => ({
+                account: r.name,
+                opening: moneyCell(r.opening_balance_cents),
+                delta: moneyCell(r.delta_cents),
+                balance: moneyCell(r.balance_cents),
+            })),
+            null,
+            {
+                id: 'dashboard-balances',
+                filter: true,
+                filterPlaceholder: 'Filter accounts…',
+            }
+        );
+
+        wireTableFilters($('#page'));
+    };
 
     const box = $('#d_lines');
 
@@ -124,6 +173,10 @@ export async function viewDashboard() {
     };
 
     const selected = new Set(['total']);
+
+    const filteredSeriesAccounts = () => applyAccountFilters(seriesData?.accounts || []);
+
+    const seriesTotalValues = () => computeTotalSeries(filteredSeriesAccounts());
 
     const redraw = () => {
         const canvas = $('#d_chart');
@@ -135,13 +188,13 @@ export async function viewDashboard() {
         if (sel.has('total')) {
             s.push({
                 name: 'Total',
-                values: (seriesData.total_cents || []).map((v) => Number(v)),
+            values: seriesTotalValues().map((v) => Number(v)),
                 color: colorFor('total'),
                 width: 3,
             });
         }
 
-        (seriesData.accounts || []).forEach((a) => {
+        filteredSeriesAccounts().forEach((a) => {
             const id = String(a.id);
             if (!sel.has(id)) return;
             const key = `acct:${id}:${a.name || ''}`;
@@ -173,7 +226,8 @@ export async function viewDashboard() {
             </label>`
         );
 
-        (seriesData.accounts || []).forEach((a) => {
+        const accts = filteredSeriesAccounts();
+        accts.forEach((a) => {
             const id = String(a.id);
             const key = `acct:${id}:${a.name || ''}`;
             lines.push(
@@ -196,7 +250,7 @@ export async function viewDashboard() {
         $('#d_lines_all').onclick = () => {
             selected.clear();
             selected.add('total');
-            for (const a of seriesData.accounts || []) selected.add(String(a.id));
+          for (const a of filteredSeriesAccounts()) selected.add(String(a.id));
             renderToggles();
             redraw();
         };
@@ -221,4 +275,40 @@ export async function viewDashboard() {
     renderToggles();
     redraw();
     window.onresize = redraw;
+
+    // Wire dashboard controls.
+    const liab = $('#d_inc_liab');
+    const hidden = $('#d_show_hidden');
+    const interest = $('#d_inc_interest');
+
+    if (liab) liab.checked = state.includeLiabilities;
+    if (hidden) hidden.checked = state.showHidden;
+    if (interest) interest.checked = state.includeInterest;
+
+    const reRender = () => {
+      renderSnapshot();
+      // Drop selections that are no longer visible.
+      const visible = new Set(filteredSeriesAccounts().map((a) => String(a.id)));
+      for (const key of Array.from(selected)) {
+        if (key !== 'total' && !visible.has(key)) selected.delete(key);
+      }
+      renderToggles();
+      redraw();
+    };
+
+    liab?.addEventListener('change', () => {
+      state.includeLiabilities = Boolean(liab.checked);
+      reRender();
+    });
+    hidden?.addEventListener('change', () => {
+      state.showHidden = Boolean(hidden.checked);
+      reRender();
+    });
+    interest?.addEventListener('change', async () => {
+      state.includeInterest = Boolean(interest.checked);
+      seriesData = await fetchSeries();
+      reRender();
+    });
+
+    renderSnapshot();
 }

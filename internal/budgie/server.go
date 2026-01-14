@@ -2,6 +2,7 @@ package budgie
 
 import (
 	"database/sql"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -44,6 +45,12 @@ func (s *server) accounts(w http.ResponseWriter, r *http.Request) {
 			OpeningBalanceCents int64   `json:"opening_balance_cents"`
 			Description         *string `json:"description"`
 			ArchivedAt          *string `json:"archived_at"`
+
+			IsLiability          int64  `json:"is_liability"`
+			IsInterestBearing    int64  `json:"is_interest_bearing"`
+			InterestAprBps       *int64 `json:"interest_apr_bps"`
+			InterestCompound     string `json:"interest_compound"`
+			ExcludeFromDashboard int64  `json:"exclude_from_dashboard"`
 		}
 		if e := readJSON(r, &body); e != nil {
 			writeErr(w, e)
@@ -64,9 +71,37 @@ func (s *server) accounts(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		if body.IsLiability != 0 {
+			body.IsLiability = 1
+		}
+		if body.IsInterestBearing != 0 {
+			body.IsInterestBearing = 1
+		}
+		if body.ExcludeFromDashboard != 0 {
+			body.ExcludeFromDashboard = 1
+		}
+		if strings.TrimSpace(body.InterestCompound) == "" {
+			body.InterestCompound = "D"
+		}
+		if body.InterestCompound != "D" && body.InterestCompound != "M" {
+			writeErr(w, badRequest("interest_compound must be 'D' or 'M'", nil))
+			return
+		}
+		if body.IsInterestBearing == 1 {
+			if body.InterestAprBps == nil {
+				writeErr(w, badRequest("interest_apr_bps is required when is_interest_bearing=1", nil))
+				return
+			}
+			if *body.InterestAprBps < 0 {
+				writeErr(w, badRequest("interest_apr_bps must be >= 0", nil))
+				return
+			}
+		}
+
 		res, err := s.db.Exec(
-			"INSERT INTO account (name, opening_date, opening_balance_cents, description, archived_at) VALUES (?, ?, ?, ?, ?)",
+			"INSERT INTO account (name, opening_date, opening_balance_cents, description, archived_at, is_liability, is_interest_bearing, interest_apr_bps, interest_compound, exclude_from_dashboard) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 			strings.TrimSpace(body.Name), od, body.OpeningBalanceCents, body.Description, archivedAt,
+			body.IsLiability, body.IsInterestBearing, body.InterestAprBps, body.InterestCompound, body.ExcludeFromDashboard,
 		)
 		if err != nil {
 			writeErr(w, badRequest("could not create account", map[string]any{"sqlite": err.Error()}))
@@ -99,6 +134,12 @@ func (s *server) accountByID(w http.ResponseWriter, r *http.Request) {
 			OpeningBalanceCents int64   `json:"opening_balance_cents"`
 			Description         *string `json:"description"`
 			ArchivedAt          *string `json:"archived_at"`
+
+			IsLiability          int64  `json:"is_liability"`
+			IsInterestBearing    int64  `json:"is_interest_bearing"`
+			InterestAprBps       *int64 `json:"interest_apr_bps"`
+			InterestCompound     string `json:"interest_compound"`
+			ExcludeFromDashboard int64  `json:"exclude_from_dashboard"`
 		}
 		if e := readJSON(r, &body); e != nil {
 			writeErr(w, e)
@@ -119,9 +160,38 @@ func (s *server) accountByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		if body.IsLiability != 0 {
+			body.IsLiability = 1
+		}
+		if body.IsInterestBearing != 0 {
+			body.IsInterestBearing = 1
+		}
+		if body.ExcludeFromDashboard != 0 {
+			body.ExcludeFromDashboard = 1
+		}
+		if strings.TrimSpace(body.InterestCompound) == "" {
+			body.InterestCompound = "D"
+		}
+		if body.InterestCompound != "D" && body.InterestCompound != "M" {
+			writeErr(w, badRequest("interest_compound must be 'D' or 'M'", nil))
+			return
+		}
+		if body.IsInterestBearing == 1 {
+			if body.InterestAprBps == nil {
+				writeErr(w, badRequest("interest_apr_bps is required when is_interest_bearing=1", nil))
+				return
+			}
+			if *body.InterestAprBps < 0 {
+				writeErr(w, badRequest("interest_apr_bps must be >= 0", nil))
+				return
+			}
+		}
+
 		_, err := s.db.Exec(
-			"UPDATE account SET name=?, opening_date=?, opening_balance_cents=?, description=?, archived_at=? WHERE id=?",
-			strings.TrimSpace(body.Name), od, body.OpeningBalanceCents, body.Description, archivedAt, id,
+			"UPDATE account SET name=?, opening_date=?, opening_balance_cents=?, description=?, archived_at=?, is_liability=?, is_interest_bearing=?, interest_apr_bps=?, interest_compound=?, exclude_from_dashboard=? WHERE id=?",
+			strings.TrimSpace(body.Name), od, body.OpeningBalanceCents, body.Description, archivedAt,
+			body.IsLiability, body.IsInterestBearing, body.InterestAprBps, body.InterestCompound, body.ExcludeFromDashboard,
+			id,
 		)
 		if err != nil {
 			writeErr(w, badRequest("could not update account", map[string]any{"sqlite": err.Error()}))
@@ -498,7 +568,12 @@ func (s *server) balances(w http.ResponseWriter, r *http.Request) {
 			  a.opening_date,
 			  a.opening_balance_cents,
 			  COALESCE(d.delta_cents, 0) AS delta_cents,
-			  a.opening_balance_cents + COALESCE(d.delta_cents, 0) AS balance_cents
+			  a.opening_balance_cents + COALESCE(d.delta_cents, 0) AS balance_cents,
+			  a.is_liability,
+			  a.is_interest_bearing,
+			  a.interest_apr_bps,
+			  a.interest_compound,
+			  a.exclude_from_dashboard
 			FROM account a
 			LEFT JOIN deltas d ON d.account_id = a.id
 			WHERE a.archived_at IS NULL
@@ -542,6 +617,66 @@ type balancePoint struct {
 	ID           int64
 	Name         string
 	BalanceCents int64
+}
+
+type accountMeta struct {
+	ID                   int64
+	Name                 string
+	IsLiability          int64
+	IsInterestBearing    int64
+	InterestAprBps       int64
+	InterestCompound     string
+	ExcludeFromDashboard int64
+}
+
+func (s *server) activeAccountMeta() (map[int64]accountMeta, error) {
+	rows, err := s.db.Query(`
+		SELECT id, name,
+		       COALESCE(is_liability, 0) AS is_liability,
+		       COALESCE(is_interest_bearing, 0) AS is_interest_bearing,
+		       COALESCE(interest_apr_bps, 0) AS interest_apr_bps,
+		       COALESCE(interest_compound, 'D') AS interest_compound,
+		       COALESCE(exclude_from_dashboard, 0) AS exclude_from_dashboard
+		FROM account
+		WHERE archived_at IS NULL
+		ORDER BY name
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[int64]accountMeta)
+	for rows.Next() {
+		var m accountMeta
+		if err := rows.Scan(&m.ID, &m.Name, &m.IsLiability, &m.IsInterestBearing, &m.InterestAprBps, &m.InterestCompound, &m.ExcludeFromDashboard); err != nil {
+			return nil, err
+		}
+		out[m.ID] = m
+	}
+	return out, rows.Err()
+}
+
+func interestForPeriodCents(balanceCents int64, aprBps int64, compound string, days int) int64 {
+	if days <= 0 || aprBps <= 0 {
+		return 0
+	}
+	// APR in bps (e.g., 1899 = 18.99%). Convert to decimal annual rate.
+	annual := (float64(aprBps) / 10000.0) / 100.0
+
+	var factor float64
+	switch compound {
+	case "M":
+		// Approximate "monthly" compounding over fractional months.
+		months := float64(days) / 30.4375
+		factor = math.Pow(1.0+(annual/12.0), months) - 1.0
+	default:
+		// Daily compounding.
+		daily := annual / 365.0
+		factor = math.Pow(1.0+daily, float64(days)) - 1.0
+	}
+	// Sign-aware: negative balances produce negative interest deltas (debt grows).
+	return int64(math.Round(float64(balanceCents) * factor))
 }
 
 func (s *server) actualBalancesAsOf(asOf string) ([]balancePoint, error) {
@@ -594,8 +729,27 @@ func (s *server) projectedBalancesAsOf(fromDate string, asOf string) ([]balanceP
 			openingBalance int64
 			delta          int64
 			projected      int64
+			// projectedBalanceQuery also returns account metadata columns.
+			// We don't need them for the series calculation, but we must scan them.
+			isLiability          any
+			isInterestBearing    any
+			interestAprBps       any
+			interestCompound     any
+			excludeFromDashboard any
 		)
-		if err := rows.Scan(&id, &name, &openingDate, &openingBalance, &delta, &projected); err != nil {
+		if err := rows.Scan(
+			&id,
+			&name,
+			&openingDate,
+			&openingBalance,
+			&delta,
+			&projected,
+			&isLiability,
+			&isInterestBearing,
+			&interestAprBps,
+			&interestCompound,
+			&excludeFromDashboard,
+		); err != nil {
 			return nil, err
 		}
 		out = append(out, balancePoint{ID: id, Name: name, BalanceCents: projected})
@@ -608,6 +762,7 @@ func (s *server) balancesSeries(w http.ResponseWriter, r *http.Request) {
 	from := r.URL.Query().Get("from_date")
 	to := r.URL.Query().Get("to_date")
 	stepDaysStr := r.URL.Query().Get("step_days")
+	includeInterestStr := r.URL.Query().Get("include_interest")
 	if mode == "" {
 		mode = "projected"
 	}
@@ -638,6 +793,16 @@ func (s *server) balancesSeries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	includeInterest := false
+	if strings.TrimSpace(includeInterestStr) != "" {
+		s := strings.ToLower(strings.TrimSpace(includeInterestStr))
+		includeInterest = s == "1" || s == "true" || s == "yes" || s == "on"
+	}
+	if includeInterest && mode != "projected" {
+		writeErr(w, badRequest("include_interest is only supported for mode=projected", nil))
+		return
+	}
+
 	fromT, err := time.Parse("2006-01-02", from)
 	if err != nil {
 		writeErr(w, badRequest("from_date must be YYYY-MM-DD", nil))
@@ -663,9 +828,14 @@ func (s *server) balancesSeries(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type accountSeries struct {
-		ID           int64   `json:"id"`
-		Name         string  `json:"name"`
-		BalanceCents []int64 `json:"balance_cents"`
+		ID                   int64   `json:"id"`
+		Name                 string  `json:"name"`
+		IsLiability          int64   `json:"is_liability"`
+		IsInterestBearing    int64   `json:"is_interest_bearing"`
+		InterestAprBps       int64   `json:"interest_apr_bps"`
+		InterestCompound     string  `json:"interest_compound"`
+		ExcludeFromDashboard int64   `json:"exclude_from_dashboard"`
+		BalanceCents         []int64 `json:"balance_cents"`
 	}
 
 	var (
@@ -676,6 +846,14 @@ func (s *server) balancesSeries(w http.ResponseWriter, r *http.Request) {
 	)
 
 	acctIndex = make(map[int64]int)
+	metaByID, err := s.activeAccountMeta()
+	if err != nil {
+		writeErr(w, serverError("failed to read account metadata", err))
+		return
+	}
+
+	basePrev := make(map[int64]int64)
+	adjPrev := make(map[int64]int64)
 
 	for cur := fromT; !cur.After(toT); cur = cur.AddDate(0, 0, stepDays) {
 		asOf := cur.Format("2006-01-02")
@@ -696,25 +874,56 @@ func (s *server) balancesSeries(w http.ResponseWriter, r *http.Request) {
 		if len(accounts) == 0 {
 			for _, p := range bal {
 				acctIndex[p.ID] = len(accounts)
-				accounts = append(accounts, accountSeries{ID: p.ID, Name: p.Name, BalanceCents: make([]int64, 0, points)})
+				m := metaByID[p.ID]
+				accounts = append(accounts, accountSeries{
+					ID:                   p.ID,
+					Name:                 p.Name,
+					IsLiability:          m.IsLiability,
+					IsInterestBearing:    m.IsInterestBearing,
+					InterestAprBps:       m.InterestAprBps,
+					InterestCompound:     m.InterestCompound,
+					ExcludeFromDashboard: m.ExcludeFromDashboard,
+					BalanceCents:         make([]int64, 0, points),
+				})
+				basePrev[p.ID] = p.BalanceCents
+				adjPrev[p.ID] = p.BalanceCents
 			}
 		}
 
 		var sum int64
 		for _, p := range bal {
-			sum += p.BalanceCents
+			val := p.BalanceCents
 			idx, ok := acctIndex[p.ID]
 			if !ok {
 				// Accounts should be stable across the series; if a new one appears, append it.
 				acctIndex[p.ID] = len(accounts)
-				accounts = append(accounts, accountSeries{ID: p.ID, Name: p.Name})
+				m := metaByID[p.ID]
+				accounts = append(accounts, accountSeries{ID: p.ID, Name: p.Name, IsLiability: m.IsLiability, IsInterestBearing: m.IsInterestBearing, InterestAprBps: m.InterestAprBps, InterestCompound: m.InterestCompound, ExcludeFromDashboard: m.ExcludeFromDashboard})
 				idx = len(accounts) - 1
 				// backfill missing earlier points with zeros
 				for i := 0; i < len(dates)-1; i++ {
 					accounts[idx].BalanceCents = append(accounts[idx].BalanceCents, 0)
 				}
+				basePrev[p.ID] = p.BalanceCents
+				adjPrev[p.ID] = p.BalanceCents
 			}
-			accounts[idx].BalanceCents = append(accounts[idx].BalanceCents, p.BalanceCents)
+
+			if includeInterest {
+				m := metaByID[p.ID]
+				bp := basePrev[p.ID]
+				delta := p.BalanceCents - bp
+				ap := adjPrev[p.ID]
+				if m.IsInterestBearing == 1 && m.InterestAprBps > 0 {
+					val = ap + delta + interestForPeriodCents(ap, m.InterestAprBps, m.InterestCompound, stepDays)
+				} else {
+					val = ap + delta
+				}
+				basePrev[p.ID] = p.BalanceCents
+				adjPrev[p.ID] = val
+			}
+
+			sum += val
+			accounts[idx].BalanceCents = append(accounts[idx].BalanceCents, val)
 		}
 		totalCents = append(totalCents, sum)
 
