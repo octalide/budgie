@@ -600,7 +600,8 @@ func (s *server) balances(w http.ResponseWriter, r *http.Request) {
 	}
 
 	q := projectedBalanceQuery()
-	rows, err := s.db.Query(q, asOf, from, asOf, asOf)
+	start := projectionStartDate(from, asOf)
+	rows, err := s.db.Query(q, asOf, start, asOf, asOf)
 	if err != nil {
 		writeErr(w, serverError("failed to compute projected balances", err))
 		return
@@ -714,9 +715,24 @@ func (s *server) actualBalancesAsOf(asOf string) ([]balancePoint, error) {
 	return out, rows.Err()
 }
 
+func projectionStartDate(fromDate string, asOf string) string {
+	// If a projection window starts in the future, include scheduled occurrences
+	// between today and the requested window so balances reflect those changes.
+	today := time.Now().Format("2006-01-02")
+	start := fromDate
+	if today < start {
+		start = today
+	}
+	if start > asOf {
+		start = asOf
+	}
+	return start
+}
+
 func (s *server) projectedBalancesAsOf(fromDate string, asOf string) ([]balancePoint, error) {
 	q := projectedBalanceQuery()
-	rows, err := s.db.Query(q, asOf, fromDate, asOf, asOf)
+	start := projectionStartDate(fromDate, asOf)
+	rows, err := s.db.Query(q, asOf, start, asOf, asOf)
 	if err != nil {
 		return nil, err
 	}
