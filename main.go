@@ -52,7 +52,7 @@ func main() {
 		addr = "127.0.0.1:" + p
 	}
 
-	handler := budgie.WithSecurityHeaders(mux, authSvc)
+	handler := budgie.WithRequestLogging(budgie.WithSecurityHeaders(mux, authSvc))
 
 	fmt.Printf("budgie listening on http://%s (db=%s)\n", addr, budgie.DBPath())
 	if err := http.ListenAndServe(addr, handler); err != nil {
