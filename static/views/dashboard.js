@@ -43,22 +43,23 @@ export async function viewDashboard() {
     };
 
     const state = {
-      includeLiabilities: false,
-      includeInterest: true,
-      showHidden: false,
-      stepDays: 1,
-      upcomingDays: 3,
-      lockedIdx: null,
+        includeLiabilities: false,
+        includeInterest: true,
+        showHidden: false,
+        stepDays: 1,
+        lockedIdx: null,
     };
+
+    const UPCOMING_DAYS = 7;
 
     const balancesRes = await api(`/api/balances?${new URLSearchParams({ mode: 'actual', as_of }).toString()}`);
     const balancesAll = balancesRes.data || [];
 
     const fetchUpcoming = async () => {
-      const toUpcoming = addDaysISO(as_of, state.upcomingDays);
-      const qs = new URLSearchParams({ from_date: as_of, to_date: toUpcoming });
-      const res = await api(`/api/occurrences?${qs.toString()}`);
-      return { to: toUpcoming, data: res.data || [] };
+        const toUpcoming = addDaysISO(as_of, UPCOMING_DAYS);
+        const qs = new URLSearchParams({ from_date: as_of, to_date: toUpcoming });
+        const res = await api(`/api/occurrences?${qs.toString()}`);
+        return { to: toUpcoming, data: res.data || [] };
     };
 
     const fetchSeries = async () => {
@@ -87,18 +88,8 @@ export async function viewDashboard() {
             <div class="dash-left-upcoming">
               ${card(
                 'Upcoming expenses',
-                'Scheduled expenses in the next few days.',
+                'Scheduled expenses in the next 7 days.',
                 `
-                  <div class="table-tools table-tools--wrap" style="margin-bottom: 10px; align-items:center;">
-                    <label class="chart-line" style="gap: 10px;">
-                      <span>Window</span>
-                      <select id="d_up_days">
-                        <option value="3" selected>3d</option>
-                        <option value="7">7d</option>
-                        <option value="14">14d</option>
-                      </select>
-                    </label>
-                  </div>
                   <div id="d_upcoming" class="dash-upcoming"></div>
                 `
               )}
@@ -140,7 +131,7 @@ export async function viewDashboard() {
                     <input type="checkbox" id="d_inc_interest" checked />
                     <span>Include interest</span>
                   </label>
-                  <label class="chart-line" style="gap: 10px;">
+                  <label class="chart-line" style="gap: 10px; margin-left: auto;">
                     <span>Granularity</span>
                     <select id="d_step">
                       <option value="1">Daily</option>
@@ -236,7 +227,7 @@ export async function viewDashboard() {
       const box = $('#d_upcoming');
       if (!box) return;
 
-      const days = Number(state.upcomingDays);
+      const days = UPCOMING_DAYS;
       const toUpcoming = upcoming?.to || addDaysISO(as_of, days);
       const occ = (upcoming?.data || []).filter((o) => String(o?.kind || '') === 'E');
 
@@ -464,13 +455,11 @@ export async function viewDashboard() {
     const hidden = $('#d_show_hidden');
     const interest = $('#d_inc_interest');
     const step = $('#d_step');
-    const upDays = $('#d_up_days');
 
     if (liab) liab.checked = state.includeLiabilities;
     if (hidden) hidden.checked = state.showHidden;
     if (interest) interest.checked = state.includeInterest;
     if (step) step.value = String(state.stepDays);
-    if (upDays) upDays.value = String(state.upcomingDays);
 
     const reRender = () => {
       renderSnapshot();
@@ -495,14 +484,6 @@ export async function viewDashboard() {
     interest?.addEventListener('change', async () => {
       state.includeInterest = Boolean(interest.checked);
       seriesData = await fetchSeries();
-      reRender();
-    });
-
-    upDays?.addEventListener('change', async () => {
-      const n = Number(upDays.value);
-      if (!Number.isFinite(n) || n < 1 || n > 31) return;
-      state.upcomingDays = n;
-      upcoming = await fetchUpcoming();
       reRender();
     });
 

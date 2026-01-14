@@ -16,6 +16,16 @@ function addYearsISO(isoDate, years) {
     return `${y}-${m}-${day}`;
 }
 
+function addDaysISO(isoDate, days) {
+    const d = new Date(`${isoDate}T00:00:00`);
+    if (!Number.isFinite(d.getTime())) return isoDate;
+    d.setDate(d.getDate() + Number(days || 0));
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
+
 function clamp(n, lo, hi) {
     return Math.max(lo, Math.min(hi, n));
 }
@@ -82,6 +92,8 @@ export async function viewExpenses() {
         topN: 12,
         lockedIdx: null,
     };
+
+    const SELECTION_WINDOW_DAYS = 14;
 
     // Persist selected schedules across reruns.
     const selected = new Set(['total']);
@@ -178,6 +190,7 @@ export async function viewExpenses() {
             updateSelectionLabel();
             renderLines();
             redrawChart();
+            renderTable();
         });
 
         run?.addEventListener('click', async () => {
@@ -209,6 +222,21 @@ export async function viewExpenses() {
 
         const clearBtn = $('#e_sel_clear');
         if (clearBtn) clearBtn.style.display = state.lockedIdx === null || state.lockedIdx === undefined ? 'none' : '';
+    };
+
+    const selectedWindow = () => {
+        const full = { from: state.from_date, to: state.to_date, label: `${state.from_date} → ${state.to_date}` };
+        if (state.lockedIdx === null || state.lockedIdx === undefined) return full;
+        const dates = axis?.dates || [];
+        if (!dates.length) return full;
+        const idx = selectedIndex();
+        const date = dates[idx] || state.from_date;
+        const half = Math.floor(SELECTION_WINDOW_DAYS / 2);
+        let from = addDaysISO(date, -half);
+        let to = addDaysISO(date, half);
+        if (from < state.from_date) from = state.from_date;
+        if (to > state.to_date) to = state.to_date;
+        return { from, to, label: `${from} → ${to}` };
     };
 
     const fetchAndCompute = async () => {
@@ -406,6 +434,7 @@ export async function viewExpenses() {
                     updateSelectionLabel();
                     renderLines();
                     redrawChart();
+                    renderTable();
                 },
             },
             formatValue: (v) => fmtDollarsAccountingFromCents(Math.round(v)),
@@ -417,15 +446,40 @@ export async function viewExpenses() {
         const box = $('#e_table');
         if (!sub || !box) return;
 
-        sub.textContent = `${state.from_date} → ${state.to_date} • ${groups.length} shown`;
+        const window = selectedWindow();
+        sub.textContent = `${window.label} • ${groups.length} shown`;
 
-        const rows = groups.map((g) => ({
-            schedule: escapeHtml(g.name),
-            count: g.count,
-            total: { text: fmtDollarsAccountingFromCents(g.total), className: 'num mono', title: String(g.total) },
-            first: g.minDate || '',
-            last: g.maxDate || '',
-        }));
+        const groupIds = new Set(groups.map((g) => Number(g.id)));
+        const bySched = new Map();
+        for (const o of occ || []) {
+            if (!o) continue;
+            if (String(o.kind || '') !== 'E') continue;
+            const sid = Number(o.schedule_id);
+            if (!Number.isFinite(sid) || !groupIds.has(sid)) continue;
+            const d = String(o.occ_date || '');
+            if (!d || d < window.from || d > window.to) continue;
+
+            let agg = bySched.get(sid);
+            if (!agg) {
+                agg = { count: 0, total: 0, minDate: d, maxDate: d };
+                bySched.set(sid, agg);
+            }
+            agg.count += 1;
+            agg.total += Number(o.amount_cents ?? 0);
+            if (d < agg.minDate) agg.minDate = d;
+            if (d > agg.maxDate) agg.maxDate = d;
+        }
+
+        const rows = groups.map((g) => {
+            const agg = bySched.get(Number(g.id)) || { count: 0, total: 0, minDate: '', maxDate: '' };
+            return {
+                schedule: escapeHtml(g.name),
+                count: agg.count,
+                total: { text: fmtDollarsAccountingFromCents(agg.total), className: 'num mono', title: String(agg.total) },
+                first: agg.minDate || '',
+                last: agg.maxDate || '',
+            };
+        });
 
         box.innerHTML = table(['schedule', 'count', 'total', 'first', 'last'], rows, null, {
             id: 'expenses-top',

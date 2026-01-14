@@ -16,6 +16,16 @@ function addYearsISO(isoDate, years) {
     return `${y}-${m}-${day}`;
 }
 
+function addDaysISO(isoDate, days) {
+    const d = new Date(`${isoDate}T00:00:00`);
+    if (!Number.isFinite(d.getTime())) return isoDate;
+    d.setDate(d.getDate() + Number(days || 0));
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
+
 function clamp(n, lo, hi) {
     return Math.max(lo, Math.min(hi, n));
 }
@@ -36,6 +46,8 @@ export async function viewProjection() {
         showHidden: false,
         lockedIdx: null,
     };
+
+    const SELECTION_WINDOW_DAYS = 14;
 
     let acctByID = new Map();
     let seriesData = null;
@@ -91,19 +103,26 @@ export async function viewProjection() {
     };
 
     const computeNetSeries = (accountsVisible) => {
-        // net = sum(assets) - sum(liabilities). Hidden accounts respect showHidden.
+        // Net worth = sum(assets) - sum(liabilities).
+        // Liabilities may be stored as negative (e.g., -30000) or positive (e.g., 30000);
+        // treat the magnitude as the amount owed and always subtract it.
+        // Also respect the "Include liabilities" toggle.
         const dates = seriesData?.dates || [];
         const assets = new Array(dates.length).fill(0);
         const liab = new Array(dates.length).fill(0);
+
         for (const a of accountsVisible || []) {
-            const vals = a.balance_cents || [];
             const isL = Number(a?.is_liability ?? 0) === 1;
+            if (isL && !state.includeLiabilities) continue;
+
+            const vals = a.balance_cents || [];
             for (let i = 0; i < dates.length; i++) {
                 const v = Number(vals[i] ?? 0);
-                if (isL) liab[i] += v;
+                if (isL) liab[i] += Math.abs(v);
                 else assets[i] += v;
             }
         }
+
         return assets.map((v, i) => v - (liab[i] ?? 0));
     };
 
@@ -121,6 +140,21 @@ export async function viewProjection() {
 
         const clearBtn = $('#p_sel_clear');
         if (clearBtn) clearBtn.style.display = state.lockedIdx === null || state.lockedIdx === undefined ? 'none' : '';
+    };
+
+    const selectedWindow = () => {
+        const full = { from: state.from_date, to: state.to_date, label: `${state.from_date} → ${state.to_date}` };
+        if (state.lockedIdx === null || state.lockedIdx === undefined) return full;
+        const dates = seriesData?.dates || [];
+        if (!dates.length) return full;
+        const idx = selectedIndex();
+        const date = dates[idx] || state.from_date;
+        const half = Math.floor(SELECTION_WINDOW_DAYS / 2);
+        let from = addDaysISO(date, -half);
+        let to = addDaysISO(date, half);
+        if (from < state.from_date) from = state.from_date;
+        if (to > state.to_date) to = state.to_date;
+        return { from, to, label: `${from} → ${to}` };
     };
 
     const renderShell = () => {
@@ -262,6 +296,7 @@ export async function viewProjection() {
             updateSelectionLabel();
             renderLines();
             redrawChart();
+            renderTxns();
         });
         runBtn?.addEventListener('click', async () => {
             await fetchAll();
@@ -447,6 +482,7 @@ export async function viewProjection() {
                     updateSelectionLabel();
                     renderLines();
                     redrawChart();
+                    renderTxns();
                 },
             },
         });
@@ -470,8 +506,15 @@ export async function viewProjection() {
             return a ? !Number(a?.exclude_from_dashboard ?? 0) : true;
         });
 
+        const window = selectedWindow();
+        const windowed = filtered.filter((o) => {
+            const d = String(o?.occ_date || '');
+            if (!d) return false;
+            return d >= window.from && d <= window.to;
+        });
+
         const cap = 500;
-        const rows = filtered.slice(0, cap).map((o) => ({
+        const rows = windowed.slice(0, cap).map((o) => ({
             date: o.occ_date,
             kind: o.kind,
             name: o.name,
@@ -480,7 +523,7 @@ export async function viewProjection() {
             dest: acctName(o.dest_account_id),
         }));
 
-        sub.textContent = `Showing ${rows.length}${filtered.length > cap ? ` of ${filtered.length}` : ''} • ${state.from_date} → ${state.to_date}`;
+        sub.textContent = `Showing ${rows.length}${windowed.length > cap ? ` of ${windowed.length}` : ''} • ${window.label}`;
         box.innerHTML = table(['date', 'kind', 'name', 'amount', 'src', 'dest'], rows, null, {
             id: 'projection-txns',
             filter: true,
