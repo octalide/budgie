@@ -77,6 +77,16 @@ export function drawLineChart(canvas, cfg) {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    // If this canvas previously had interactive handlers attached, remove them.
+    if (canvas.__budgieLineChartCleanup) {
+        try {
+            canvas.__budgieLineChartCleanup();
+        } catch {
+            // ignore
+        }
+        canvas.__budgieLineChartCleanup = null;
+    }
+
     const rect = canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
     const w = Math.max(1, Math.floor(rect.width));
@@ -93,11 +103,12 @@ export function drawLineChart(canvas, cfg) {
     const series = cfg.series || [];
     const labels = cfg.labels || [];
 
+    // Clear immediately so "No data" doesn't overlay a previous render.
     ctx.clearRect(0, 0, w, h);
-
-    // Background
     ctx.fillStyle = 'rgba(0,0,0,0.10)';
     ctx.fillRect(0, 0, w, h);
+
+    const crosshair = Boolean(cfg.crosshair);
 
     // Determine min/max
     let minV = Infinity;
@@ -134,54 +145,179 @@ export function drawLineChart(canvas, cfg) {
     const step = niceStep(rawStep);
     const y0 = Math.floor(minV / step) * step;
 
-    ctx.lineWidth = 1;
-    ctx.strokeStyle = 'rgba(156,163,175,0.15)';
-    ctx.fillStyle = 'rgba(156,163,175,0.65)';
-    ctx.font = '11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+    const mono11 = '11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+    const mono12 = '12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
 
-    for (let k = 0; k <= gridY + 2; k++) {
-        const v = y0 + k * step;
-        if (v < minV || v > maxV) continue;
-        const y = yAt(v);
-        ctx.beginPath();
-        ctx.moveTo(padding.l, y);
-        ctx.lineTo(padding.l + plotW, y);
-        ctx.stroke();
-        const label = fmtDollarsAccountingFromCents(Math.round(v));
-        ctx.fillText(label, 8, y + 4);
-    }
-
-    // X ticks (a few)
     const xTicks = clamp(cfg.xTicks ?? 4, 2, 10);
-    ctx.fillStyle = 'rgba(156,163,175,0.65)';
-    for (let t = 0; t < xTicks; t++) {
-        const i = Math.round(((labels.length - 1) * t) / (xTicks - 1));
-        const x = xAt(i);
-        const label = labels[i] || '';
-        ctx.fillText(label, x - Math.min(28, label.length * 3), padding.t + plotH + 20);
-    }
 
-    // Axes
-    ctx.strokeStyle = 'rgba(229,231,235,0.25)';
-    ctx.beginPath();
-    ctx.moveTo(padding.l, padding.t);
-    ctx.lineTo(padding.l, padding.t + plotH);
-    ctx.lineTo(padding.l + plotW, padding.t + plotH);
-    ctx.stroke();
+    const valueFmt =
+        typeof cfg.formatValue === 'function'
+            ? cfg.formatValue
+            : (v) => fmtDollarsAccountingFromCents(Math.round(Number(v ?? 0)));
 
-    // Series lines
-    for (const s of series) {
-        const values = s.values || [];
-        if (values.length < 2) continue;
-        ctx.lineWidth = s.width || 2;
-        ctx.strokeStyle = s.color || 'rgba(203,213,225,0.95)';
-        ctx.beginPath();
-        for (let i = 0; i < values.length; i++) {
-            const x = xAt(i);
-            const y = yAt(values[i]);
-            if (i === 0) ctx.moveTo(x, y);
-            else ctx.lineTo(x, y);
+    const render = (hoverIndex) => {
+        ctx.clearRect(0, 0, w, h);
+
+        // Background
+        ctx.fillStyle = 'rgba(0,0,0,0.10)';
+        ctx.fillRect(0, 0, w, h);
+
+        // Grid + Y ticks
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = 'rgba(156,163,175,0.15)';
+        ctx.fillStyle = 'rgba(156,163,175,0.65)';
+        ctx.font = mono11;
+
+        for (let k = 0; k <= gridY + 2; k++) {
+            const v = y0 + k * step;
+            if (v < minV || v > maxV) continue;
+            const y = yAt(v);
+            ctx.beginPath();
+            ctx.moveTo(padding.l, y);
+            ctx.lineTo(padding.l + plotW, y);
+            ctx.stroke();
+            const label = fmtDollarsAccountingFromCents(Math.round(v));
+            ctx.fillText(label, 8, y + 4);
         }
+
+        // X ticks (a few)
+        ctx.fillStyle = 'rgba(156,163,175,0.65)';
+        ctx.font = mono11;
+        for (let t = 0; t < xTicks; t++) {
+            const i = Math.round(((labels.length - 1) * t) / (xTicks - 1));
+            const x = xAt(i);
+            const label = labels[i] || '';
+            ctx.fillText(label, x - Math.min(28, label.length * 3), padding.t + plotH + 20);
+        }
+
+        // Axes
+        ctx.strokeStyle = 'rgba(229,231,235,0.25)';
+        ctx.beginPath();
+        ctx.moveTo(padding.l, padding.t);
+        ctx.lineTo(padding.l, padding.t + plotH);
+        ctx.lineTo(padding.l + plotW, padding.t + plotH);
         ctx.stroke();
+
+        // Series lines
+        for (const s of series) {
+            const values = s.values || [];
+            if (values.length < 2) continue;
+            ctx.lineWidth = s.width || 2;
+            ctx.strokeStyle = s.color || 'rgba(203,213,225,0.95)';
+            ctx.beginPath();
+            for (let i = 0; i < values.length; i++) {
+                const x = xAt(i);
+                const y = yAt(values[i]);
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+        }
+
+        if (!crosshair) return;
+        if (hoverIndex === null || hoverIndex === undefined) return;
+        if (!labels || labels.length === 0) return;
+        const i = clamp(Math.round(hoverIndex), 0, labels.length - 1);
+        const x = xAt(i);
+
+        // Crosshair line
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = 'rgba(229,231,235,0.35)';
+        ctx.beginPath();
+        ctx.moveTo(x, padding.t);
+        ctx.lineTo(x, padding.t + plotH);
+        ctx.stroke();
+
+        // Points + tooltip content
+        const tooltipLines = [];
+        const dateLabel = String(labels[i] || '');
+        tooltipLines.push({ kind: 'title', text: dateLabel });
+
+        for (const s of series) {
+            const values = s.values || [];
+            const v = values[i];
+            if (typeof v !== 'number' || !Number.isFinite(v)) continue;
+            const name = String(s.name || '');
+            const text = `${name}: ${valueFmt(v)}`;
+            tooltipLines.push({ kind: 'series', text, color: s.color || 'rgba(203,213,225,0.95)', value: v });
+
+            // point marker
+            const y = yAt(v);
+            ctx.fillStyle = s.color || 'rgba(203,213,225,0.95)';
+            ctx.beginPath();
+            ctx.arc(x, y, 3, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(15,23,42,0.65)';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+        }
+
+        // Tooltip
+        ctx.font = mono12;
+        const padX = 10;
+        const padY = 8;
+        const lineH = 15;
+        let maxW = 0;
+        for (const ln of tooltipLines) {
+            maxW = Math.max(maxW, ctx.measureText(ln.text).width);
+        }
+        const boxW = Math.ceil(maxW + padX * 2 + 14);
+        const boxH = Math.ceil(padY * 2 + tooltipLines.length * lineH);
+        let boxX = x + 12;
+        if (boxX + boxW > w - 6) boxX = x - 12 - boxW;
+        boxX = clamp(boxX, 6, w - 6 - boxW);
+        let boxY = padding.t + 6;
+        if (boxY + boxH > h - 6) boxY = h - 6 - boxH;
+        boxY = clamp(boxY, 6, h - 6 - boxH);
+
+        ctx.fillStyle = 'rgba(15,23,42,0.92)';
+        ctx.strokeStyle = 'rgba(148,163,184,0.25)';
+        ctx.lineWidth = 1;
+        ctx.fillRect(boxX, boxY, boxW, boxH);
+        ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+        let yCursor = boxY + padY + lineH - 4;
+        for (let idx = 0; idx < tooltipLines.length; idx++) {
+            const ln = tooltipLines[idx];
+            if (ln.kind === 'title') {
+                ctx.fillStyle = 'rgba(229,231,235,0.95)';
+                ctx.fillText(ln.text, boxX + padX, yCursor);
+            } else {
+                // swatch
+                ctx.fillStyle = ln.color;
+                ctx.fillRect(boxX + padX, yCursor - 10, 10, 10);
+                ctx.fillStyle = 'rgba(229,231,235,0.90)';
+                ctx.fillText(ln.text, boxX + padX + 14, yCursor);
+            }
+            yCursor += lineH;
+        }
+    };
+
+    render(null);
+
+    if (crosshair && labels.length > 0) {
+        let lastIdx = null;
+
+        const onMove = (e) => {
+            const r = canvas.getBoundingClientRect();
+            const mx = e.clientX - r.left;
+            const rel = (mx - padding.l) / Math.max(1, plotW);
+            const idx = clamp(Math.round(rel * Math.max(1, labels.length - 1)), 0, labels.length - 1);
+            if (idx === lastIdx) return;
+            lastIdx = idx;
+            render(idx);
+        };
+        const onLeave = () => {
+            lastIdx = null;
+            render(null);
+        };
+
+        canvas.addEventListener('mousemove', onMove);
+        canvas.addEventListener('mouseleave', onLeave);
+
+        canvas.__budgieLineChartCleanup = () => {
+            canvas.removeEventListener('mousemove', onMove);
+            canvas.removeEventListener('mouseleave', onLeave);
+        };
     }
 }

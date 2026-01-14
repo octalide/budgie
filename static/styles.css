@@ -163,6 +163,18 @@ a {
     margin-bottom: 4px;
 }
 
+/* Inline controls inside table toolbars (e.g., Dashboard granularity dropdown). */
+.table-tools .chart-line {
+    margin-bottom: 0;
+}
+
+.table-tools .chart-line select,
+.table-tools .chart-line input[type='number'],
+.table-tools .chart-line input[type='text'] {
+    width: auto;
+    padding: 6px 10px;
+}
+
 .table-filter {
     flex: 1;
     min-width: 160px;
@@ -253,6 +265,75 @@ a {
     gap: 12px;
     min-height: 0;
     flex: 1;
+}
+
+.dash-upcoming {
+    border: 1px solid var(--border);
+    background: rgba(0, 0, 0, 0.10);
+    padding: 10px;
+}
+
+.dash-upcoming-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+.dash-upcoming-title {
+    font-size: 12px;
+    color: var(--text);
+}
+
+.dash-upcoming-sub {
+    margin-top: 3px;
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.dash-upcoming-total {
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+}
+
+.dash-upcoming-list {
+    display: grid;
+    gap: 6px;
+    max-height: 148px;
+    overflow: auto;
+}
+
+.dash-upcoming-row {
+    display: grid;
+    grid-template-columns: 90px 1fr 1fr 110px;
+    gap: 10px;
+    align-items: center;
+    font-size: 12px;
+}
+
+.dash-upcoming-name,
+.dash-upcoming-acct {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--muted);
+}
+
+.dash-upcoming-date {
+    color: var(--muted);
+}
+
+.dash-upcoming-amt {
+    text-align: right;
+    color: var(--text);
+}
+
+.dash-upcoming-more {
+    margin-top: 8px;
+    font-size: 12px;
+    color: var(--muted);
 }
 
 .dash-snapshot-table {

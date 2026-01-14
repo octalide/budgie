@@ -1,4 +1,4 @@
-import { $ } from '../js/dom.js';
+import { $, escapeHtml } from '../js/dom.js';
 import { api } from '../js/api.js';
 import { isoToday } from '../js/date.js';
 import { fmtDollarsAccountingFromCents } from '../js/money.js';
@@ -14,6 +14,16 @@ function addMonthsISO(isoDate, months) {
     const m = String(d.getMonth() + 1).padStart(2, '0');
     const day = String(d.getDate()).padStart(2, '0');
     return `${y}-${m}-${day}`;
+}
+
+function addDaysISO(isoDate, days) {
+  const d = new Date(`${isoDate}T00:00:00`);
+  if (!Number.isFinite(d.getTime())) return isoDate;
+  d.setDate(d.getDate() + Number(days || 0));
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
 export async function viewDashboard() {
@@ -32,17 +42,26 @@ export async function viewDashboard() {
       includeLiabilities: false,
       includeInterest: true,
       showHidden: false,
+      stepDays: 1,
+      upcomingDays: 3,
     };
 
     const balancesRes = await api(`/api/balances?${new URLSearchParams({ mode: 'actual', as_of }).toString()}`);
     const balancesAll = balancesRes.data || [];
+
+    const fetchUpcoming = async () => {
+      const toUpcoming = addDaysISO(as_of, state.upcomingDays);
+      const qs = new URLSearchParams({ from_date: as_of, to_date: toUpcoming });
+      const res = await api(`/api/occurrences?${qs.toString()}`);
+      return { to: toUpcoming, data: res.data || [] };
+    };
 
     const fetchSeries = async () => {
       const qs = new URLSearchParams({
         mode: 'projected',
         from_date: as_of,
         to_date,
-        step_days: '7',
+        step_days: String(state.stepDays),
       });
       if (state.includeInterest) qs.set('include_interest', '1');
       const seriesRes = await api(`/api/balances/series?${qs.toString()}`);
@@ -50,6 +69,7 @@ export async function viewDashboard() {
     };
 
     let seriesData = await fetchSeries();
+    let upcoming = await fetchUpcoming();
 
     $('#page').innerHTML = `
     <div class="dashboard">
@@ -72,9 +92,19 @@ export async function viewDashboard() {
                     <input type="checkbox" id="d_show_hidden" />
                     <span>Show hidden accounts</span>
                   </label>
+                  <label class="chart-line" style="gap: 10px;">
+                    <span>Upcoming</span>
+                    <select id="d_up_days">
+                      <option value="3" selected>3d</option>
+                      <option value="7">7d</option>
+                      <option value="14">14d</option>
+                    </select>
+                  </label>
                 </div>
 
                 <div class="notice" id="d_snapshot_stats"></div>
+
+                <div id="d_upcoming" class="dash-upcoming"></div>
 
                 <div class="dash-snapshot-table" id="d_snapshot_table"></div>
               </div>
@@ -86,10 +116,19 @@ export async function viewDashboard() {
               'Projected total (and optional per-account lines).',
               `
               <div class="dash-projection">
-                <div class="table-tools table-tools--wrap" style="margin-bottom: 10px;">
+                <div class="table-tools table-tools--wrap" style="margin-bottom: 10px; align-items:center;">
                   <label class="chart-line" style="gap: 10px;">
                     <input type="checkbox" id="d_inc_interest" checked />
                     <span>Include interest</span>
+                  </label>
+                  <label class="chart-line" style="gap: 10px;">
+                    <span>Granularity</span>
+                    <select id="d_step">
+                      <option value="1">Daily</option>
+                      <option value="7">Weekly</option>
+                      <option value="14">Biweekly</option>
+                      <option value="30">Monthly</option>
+                    </select>
                   </label>
                 </div>
                 <div>
@@ -111,6 +150,14 @@ export async function viewDashboard() {
 
     const isLiability = (r) => Number(r?.is_liability ?? 0) === 1;
     const isHidden = (r) => Number(r?.exclude_from_dashboard ?? 0) === 1;
+
+    const acctByID = new Map(balancesAll.map((a) => [Number(a.id), a]));
+    const acctName = (id) => {
+      if (id === null || id === undefined || id === '') return '';
+      const n = Number(id);
+      if (!Number.isFinite(n)) return '';
+      return acctByID.get(n)?.name || String(id);
+    };
 
     const applyAccountFilters = (arr) =>
         (arr || []).filter((r) => {
@@ -165,6 +212,70 @@ export async function viewDashboard() {
         wireTableFilters($('#page'));
     };
 
+    const renderUpcoming = () => {
+      const box = $('#d_upcoming');
+      if (!box) return;
+
+      const days = Number(state.upcomingDays);
+      const toUpcoming = upcoming?.to || addDaysISO(as_of, days);
+      const occ = (upcoming?.data || []).filter((o) => String(o?.kind || '') === 'E');
+
+      // Respect "Show hidden accounts" for upcoming items (based on src account).
+      const filtered = occ.filter((o) => {
+        if (state.showHidden) return true;
+        const src = o?.src_account_id;
+        const a = src === null || src === undefined ? null : acctByID.get(Number(src));
+        return a ? !isHidden(a) : true;
+      });
+
+      filtered.sort((a, b) => {
+        const da = String(a?.occ_date || '');
+        const db = String(b?.occ_date || '');
+        if (da < db) return -1;
+        if (da > db) return 1;
+        const na = String(a?.name || '');
+        const nb = String(b?.name || '');
+        return na.localeCompare(nb);
+      });
+
+      const maxRows = 7;
+      const shown = filtered.slice(0, maxRows);
+      const total = filtered.reduce((acc, o) => acc + Number(o?.amount_cents ?? 0), 0);
+
+      const rows = shown
+        .map((o) => {
+          const date = escapeHtml(String(o.occ_date || ''));
+          const name = escapeHtml(String(o.name || ''));
+          const account = escapeHtml(acctName(o.src_account_id));
+          const amt = fmtDollarsAccountingFromCents(Number(o.amount_cents ?? 0));
+          return `
+            <div class="dash-upcoming-row">
+              <div class="dash-upcoming-date mono">${date}</div>
+              <div class="dash-upcoming-name" title="${name}">${name}</div>
+              <div class="dash-upcoming-acct" title="${account}">${account}</div>
+              <div class="dash-upcoming-amt mono">${escapeHtml(amt)}</div>
+            </div>
+          `;
+        })
+        .join('');
+
+      const title = `Upcoming expenses (${days}d)`;
+      const subtitle = `${as_of} → ${toUpcoming}`;
+      const totalLine = `Total: <span class="mono">${escapeHtml(fmtDollarsAccountingFromCents(total))}</span>`;
+
+      box.innerHTML = `
+        <div class="dash-upcoming-head">
+          <div>
+            <div class="dash-upcoming-title">${title}</div>
+            <div class="dash-upcoming-sub">${escapeHtml(subtitle)}</div>
+          </div>
+          <div class="dash-upcoming-total">${totalLine}</div>
+        </div>
+        ${shown.length ? `<div class="dash-upcoming-list">${rows}</div>` : `<div class="notice">No scheduled expenses in the next ${days} days.</div>`}
+        ${filtered.length > maxRows ? `<div class="dash-upcoming-more">Showing ${maxRows} of ${filtered.length}.</div>` : ''}
+      `;
+    };
+
     const box = $('#d_lines');
 
     const totalColor = 'hsla(210, 15%, 92%, 0.92)';
@@ -215,6 +326,7 @@ export async function viewDashboard() {
             labels: seriesData.dates || [],
             series: s,
             xTicks: 4,
+          crosshair: true,
         });
     };
 
@@ -292,13 +404,18 @@ export async function viewDashboard() {
     const liab = $('#d_inc_liab');
     const hidden = $('#d_show_hidden');
     const interest = $('#d_inc_interest');
+    const step = $('#d_step');
+    const upDays = $('#d_up_days');
 
     if (liab) liab.checked = state.includeLiabilities;
     if (hidden) hidden.checked = state.showHidden;
     if (interest) interest.checked = state.includeInterest;
+    if (step) step.value = String(state.stepDays);
+    if (upDays) upDays.value = String(state.upcomingDays);
 
     const reRender = () => {
       renderSnapshot();
+      renderUpcoming();
       // Drop selections that are no longer visible.
       const visible = new Set(filteredSeriesAccounts().map((a) => String(a.id)));
       for (const key of Array.from(selected)) {
@@ -322,5 +439,22 @@ export async function viewDashboard() {
       reRender();
     });
 
+    upDays?.addEventListener('change', async () => {
+      const n = Number(upDays.value);
+      if (!Number.isFinite(n) || n < 1 || n > 31) return;
+      state.upcomingDays = n;
+      upcoming = await fetchUpcoming();
+      reRender();
+    });
+
+    step?.addEventListener('change', async () => {
+      const n = Number(step.value);
+      if (!Number.isFinite(n) || n < 1 || n > 366) return;
+      state.stepDays = n;
+      seriesData = await fetchSeries();
+      reRender();
+    });
+
     renderSnapshot();
+    renderUpcoming();
 }
