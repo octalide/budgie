@@ -45,7 +45,7 @@ func main() {
 	// API
 	budgie.RegisterAPI(mux, db, authSvc)
 
-	addr := "127.0.0.1:5177"
+	addr := "127.0.0.1:4000"
 	if bind := strings.TrimSpace(os.Getenv("BUDGIE_BIND")); bind != "" {
 		addr = bind
 	} else if p := strings.TrimSpace(os.Getenv("PORT")); p != "" {

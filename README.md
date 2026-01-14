@@ -20,7 +20,7 @@ Budgie is a small personal finance tracker I built for myself. It’s a lightwei
 2. Run the server:
    - `go run .`
 3. Open the UI:
-   - http://127.0.0.1:5177/
+   - http://127.0.0.1:4000/
 
 Budgie auto-creates the database schema on first run.
 
@@ -29,7 +29,7 @@ Budgie auto-creates the database schema on first run.
 Settings are read from environment variables. See `.env.example` for the full list. Common ones:
 
 - `BUDGIE_DB` — database path (default `./budgie.db`)
-- `BUDGIE_BIND` — bind address (default `127.0.0.1:5177`)
+- `BUDGIE_BIND` — bind address (default `127.0.0.1:4000`)
 - `PORT` — alternate port override
 - `BUDGIE_ALLOW_SIGNUP` — allow local account signups
 - `BUDGIE_OIDC_*` — optional OIDC login (Google, etc.)

@@ -30,6 +30,10 @@ sudo mkdir -p "$APP_DIR" "$ENV_DIR"
 
 sudo install -m 0755 "$BIN_TMP" "$BIN_DEST"
 sudo install -m 0644 "$SCHEMA_SRC" "$SCHEMA_DEST"
+if [[ -d "$ROOT_DIR/static" ]]; then
+  sudo rm -rf "$APP_DIR/static"
+  sudo cp -a "$ROOT_DIR/static" "$APP_DIR/"
+fi
 sudo chown -R "$APP_USER:$APP_GROUP" "$APP_DIR"
 
 if [[ ! -f "$ENV_FILE" ]]; then
