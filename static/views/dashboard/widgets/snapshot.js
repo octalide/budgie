@@ -35,8 +35,10 @@ export const snapshot = {
 
     const update = async () => {
       const cfg = { ...snapshot.defaultConfig, ...(instance.config || {}) };
-      const useProjected = cfg.syncSelection && context.selection?.locked;
-      const baseDate = useProjected ? context.selection.date : context.asOf;
+      const useSelection = cfg.syncSelection && context.selection?.locked;
+      const selectionMode = context.selection?.mode || 'projected';
+      const useProjected = useSelection && selectionMode === 'projected';
+      const baseDate = useSelection ? context.selection.date : context.asOf;
       const balancesAll = await context.getBalances(baseDate, {
         mode: useProjected ? 'projected' : 'actual',
         fromDate: context.asOf,

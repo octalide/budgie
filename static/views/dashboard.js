@@ -478,7 +478,7 @@ export async function viewDashboard() {
     if (toInput) toInput.value = nextTo;
 
     if (context.selection.locked && (context.selection.date < nextFrom || context.selection.date > nextTo)) {
-      context.setSelection({ locked: false, idx: 0, date: nextFrom, source: null });
+      context.setSelection({ locked: false, idx: 0, date: nextFrom, source: null, mode: context.selection.mode || 'projected' });
     }
 
     for (const controller of controllers.values()) controller?.update?.();

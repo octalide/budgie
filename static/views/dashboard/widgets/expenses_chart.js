@@ -213,6 +213,15 @@ export const expensesChart = {
       });
     };
 
+    const syncSelection = () => {
+      const dates = state.axis?.dates || [];
+      const locked = state.lockedIdx !== null && state.lockedIdx !== undefined;
+      const idx = locked ? clamp(Number(state.lockedIdx || 0), 0, dates.length - 1) : 0;
+      const date = dates[idx] || context.asOf;
+      if (context.selection.source && context.selection.source !== instance.id && context.selection.locked) return;
+      context.setSelection({ locked, idx, date, source: instance.id });
+    };
+
     const redrawChart = () => {
       if (!canvas || !state.axis?.dates?.length) return;
 
@@ -246,6 +255,7 @@ export const expensesChart = {
             updateSelectionLabel();
             renderLines();
             redrawChart();
+            syncSelection();
           },
         },
         formatValue: (v) => fmtDollarsAccountingFromCents(Math.round(v)),
@@ -260,6 +270,20 @@ export const expensesChart = {
       redrawChart();
     };
 
+    const selectionUnsub = context.on('selection', (sel) => {
+      if (!sel || sel.source === instance.id) return;
+      if (!state.axis?.dates?.length) return;
+      if (sel.locked) {
+        const idx = state.axis.dates.indexOf(sel.date);
+        state.lockedIdx = idx >= 0 ? idx : null;
+      } else {
+        state.lockedIdx = null;
+      }
+      updateSelectionLabel();
+      renderLines();
+      redrawChart();
+    });
+
     update();
 
     return {
@@ -267,7 +291,9 @@ export const expensesChart = {
       resize() {
         redrawChart();
       },
-      destroy() {},
+      destroy() {
+        selectionUnsub();
+      },
     };
   },
 };
