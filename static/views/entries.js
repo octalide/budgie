@@ -55,8 +55,17 @@ export async function viewEntries() {
 
     wireTableFilters($('#page'));
 
+    const entryTypeFromEntry = (entry) => {
+      const hasSrc = entry?.src_account_id != null && entry?.src_account_id !== '';
+      const hasDest = entry?.dest_account_id != null && entry?.dest_account_id !== '';
+      if (hasSrc && hasDest) return 'transfer';
+      if (hasDest) return 'income';
+      return 'expense';
+    };
+
     const entryModalHtml = (entry) => {
         const isEdit = Boolean(entry);
+        const entryType = entryTypeFromEntry(entry);
         return `
       <div class="grid three">
         <div>
@@ -65,7 +74,7 @@ export async function viewEntries() {
         </div>
         <div>
           <label>Name</label>
-          <input id="em_name" value="${escapeHtml(entry?.name || '')}" placeholder="Expense" />
+          <input id="em_name" value="${escapeHtml(entry?.name || '')}" placeholder="Entry" />
         </div>
         <div>
           <label>Amount ($)</label>
@@ -73,11 +82,19 @@ export async function viewEntries() {
         </div>
 
         <div>
-          <label>Src account (expense/transfer)</label>
+          <label>Type</label>
+          <select id="em_type">
+            <option value="expense"${entryType === 'expense' ? ' selected' : ''}>Expense</option>
+            <option value="income"${entryType === 'income' ? ' selected' : ''}>Income</option>
+            <option value="transfer"${entryType === 'transfer' ? ' selected' : ''}>Transfer</option>
+          </select>
+        </div>
+        <div data-entry-src>
+          <label>From account</label>
           <select id="em_src">${buildOptions(accounts.data, entry?.src_account_id)}</select>
         </div>
-        <div>
-          <label>Dest account (income/transfer)</label>
+        <div data-entry-dest>
+          <label>To account</label>
           <select id="em_dest">${buildOptions(accounts.data, entry?.dest_account_id)}</select>
         </div>
         <div>
@@ -105,17 +122,88 @@ export async function viewEntries() {
         });
 
         const modal = root.querySelector('.modal');
+        const typeSel = modal.querySelector('#em_type');
+        const srcWrap = modal.querySelector('[data-entry-src]');
+        const destWrap = modal.querySelector('[data-entry-dest]');
+        const srcSelect = modal.querySelector('#em_src');
+        const destSelect = modal.querySelector('#em_dest');
+        const srcLabel = srcWrap?.querySelector('label');
+        const destLabel = destWrap?.querySelector('label');
+
+        const syncEntryTypeUI = () => {
+          const type = typeSel?.value || 'expense';
+          if (type === 'expense') {
+            if (srcLabel) srcLabel.textContent = 'From account (expense)';
+            if (destLabel) destLabel.textContent = 'To account';
+            if (srcWrap) srcWrap.style.display = '';
+            if (destWrap) destWrap.style.display = 'none';
+            if (srcSelect) srcSelect.disabled = false;
+            if (destSelect) {
+              destSelect.disabled = true;
+              destSelect.value = '';
+            }
+            return;
+          }
+          if (type === 'income') {
+            if (srcLabel) srcLabel.textContent = 'From account';
+            if (destLabel) destLabel.textContent = 'To account (income)';
+            if (srcWrap) srcWrap.style.display = 'none';
+            if (destWrap) destWrap.style.display = '';
+            if (srcSelect) {
+              srcSelect.disabled = true;
+              srcSelect.value = '';
+            }
+            if (destSelect) destSelect.disabled = false;
+            return;
+          }
+
+          if (srcLabel) srcLabel.textContent = 'From account (transfer)';
+          if (destLabel) destLabel.textContent = 'To account (transfer)';
+          if (srcWrap) srcWrap.style.display = '';
+          if (destWrap) destWrap.style.display = '';
+          if (srcSelect) srcSelect.disabled = false;
+          if (destSelect) destSelect.disabled = false;
+        };
+
+        typeSel?.addEventListener('change', syncEntryTypeUI);
+        syncEntryTypeUI();
+
         modal.querySelector('#em_save').onclick = async () => {
             try {
                 const amount_cents = parseCentsFromDollarsString(modal.querySelector('#em_amount').value);
                 if (amount_cents === null) throw new Error('Amount is required');
 
+            const entryType = typeSel?.value || 'expense';
+            const srcValue = srcSelect?.value || '';
+            const destValue = destSelect?.value || '';
+            const src_account_id =
+              entryType === 'expense' || entryType === 'transfer'
+                ? (srcValue ? Number(srcValue) : null)
+                : null;
+            const dest_account_id =
+              entryType === 'income' || entryType === 'transfer'
+                ? (destValue ? Number(destValue) : null)
+                : null;
+
+            if (entryType === 'expense' && !src_account_id) {
+              throw new Error('Select a source account for an expense');
+            }
+            if (entryType === 'income' && !dest_account_id) {
+              throw new Error('Select a destination account for income');
+            }
+            if (entryType === 'transfer' && (!src_account_id || !dest_account_id)) {
+              throw new Error('Select both accounts for a transfer');
+            }
+            if (src_account_id && dest_account_id && src_account_id === dest_account_id) {
+              throw new Error('Source and destination accounts must differ');
+            }
+
             const payload = {
               entry_date: modal.querySelector('#em_date').value,
               name: modal.querySelector('#em_name').value,
               amount_cents,
-              src_account_id: modal.querySelector('#em_src').value ? Number(modal.querySelector('#em_src').value) : null,
-              dest_account_id: modal.querySelector('#em_dest').value ? Number(modal.querySelector('#em_dest').value) : null,
+              src_account_id,
+              dest_account_id,
               schedule_id: modal.querySelector('#em_schedule').value ? Number(modal.querySelector('#em_schedule').value) : null,
               description: modal.querySelector('#em_desc').value || null,
             };
