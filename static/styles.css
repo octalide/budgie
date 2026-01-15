@@ -344,28 +344,44 @@ body.auth-logged-out .sidebar {
     min-height: 0;
 }
 
-/* Dashboard: use available viewport height and avoid wasted space. */
+/* Dashboard: modular widget grid. */
 .dashboard {
     height: 100%;
     min-height: 0;
-}
-
-.dashboard > .card {
-    height: 100%;
-}
-
-.dashboard > .card > .card__body {
-    flex: 1;
-    min-height: 0;
-    overflow: hidden;
     display: flex;
     flex-direction: column;
+    gap: 12px;
+    overflow: hidden;
 }
 
-.dashboard .dash-split {
-    flex: 1;
-    height: 100%;
-    min-height: 0;
+.dash-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.dash-title {
+    font-weight: 650;
+    letter-spacing: 0.2px;
+}
+
+.dash-subtitle {
+    margin-top: 3px;
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.dash-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.dash-actions button {
+    padding: 6px 10px;
+    font-size: 12px;
 }
 
 .dashboard .dash-grid {
@@ -373,21 +389,25 @@ body.auth-logged-out .sidebar {
     min-height: 0;
     display: grid;
     gap: 12px;
-    grid-template-columns: minmax(320px, 1fr) 2fr;
-    grid-template-rows: minmax(0, 2fr) minmax(0, 3fr);
-    grid-template-areas:
-        "left-top right"
-        "left-bottom right";
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    grid-auto-rows: minmax(180px, auto);
+    grid-auto-flow: dense;
     align-items: stretch;
+    align-content: start;
+    overflow: auto;
+    padding-bottom: 12px;
 }
 
 .dashboard .dash-widget {
-    min-height: 0;
+    min-height: var(--widget-min-height, 240px);
     display: flex;
+}
+
+.dashboard.edit-mode .dash-widget {
     cursor: grab;
 }
 
-.dashboard .dash-widget:active {
+.dashboard.edit-mode .dash-widget:active {
     cursor: grabbing;
 }
 
@@ -395,29 +415,74 @@ body.auth-logged-out .sidebar {
     opacity: 0.6;
 }
 
-.dashboard .dash-widget > .card {
+.dashboard .dash-widget.size-sm {
+    --widget-min-height: 220px;
+    grid-column: span 1;
+    grid-row: span 1;
+}
+
+.dashboard .dash-widget.size-md {
+    --widget-min-height: 300px;
+    grid-column: span 1;
+    grid-row: span 2;
+}
+
+.dashboard .dash-widget.size-lg {
+    --widget-min-height: 420px;
+    grid-column: span 2;
+    grid-row: span 3;
+}
+
+.dashboard .dash-widget-card {
+    border: 1px solid var(--border);
+    background: rgba(0, 0, 0, 0.18);
+    display: flex;
+    flex-direction: column;
     flex: 1;
     min-height: 0;
 }
 
-.dashboard .dash-widget > .card > .card__body {
-    flex: 1;
+.dashboard .dash-widget-head {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.dashboard .dash-widget-handle {
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: 1px;
+    user-select: none;
+}
+
+.dashboard .dash-widget-title {
+    font-weight: 600;
+}
+
+.dashboard .dash-widget-actions {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.dashboard .dash-widget-actions button {
+    padding: 4px 8px;
+    font-size: 12px;
+}
+
+.dashboard:not(.edit-mode) .dash-widget-actions {
+    display: none;
+}
+
+.dashboard .dash-widget-body {
+    padding: 12px;
     min-height: 0;
     overflow: hidden;
     display: flex;
     flex-direction: column;
-}
-
-.dashboard .dash-pos-left-top {
-    grid-area: left-top;
-}
-
-.dashboard .dash-pos-left-bottom {
-    grid-area: left-bottom;
-}
-
-.dashboard .dash-pos-right {
-    grid-area: right;
 }
 
 .dashboard .dash-split > .card {
@@ -570,6 +635,22 @@ body.auth-logged-out .sidebar {
     margin-top: 8px;
     font-size: 12px;
     color: var(--muted);
+}
+
+.dash-widget-picker {
+    border: 1px solid var(--border);
+    background: rgba(0, 0, 0, 0.12);
+    padding: 10px;
+}
+
+.dash-widget-picker__title {
+    font-weight: 600;
+}
+
+.dash-widget-picker__sub {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 4px;
 }
 
 .dash-snapshot-table {
@@ -1079,11 +1160,10 @@ button.danger {
 
     .dashboard .dash-grid {
         grid-template-columns: 1fr;
-        grid-template-rows: minmax(0, auto) minmax(0, auto) minmax(0, auto);
-        grid-template-areas:
-            "left-top"
-            "right"
-            "left-bottom";
+    }
+
+    .dashboard .dash-widget.size-lg {
+        grid-column: span 1;
     }
 
     .grid.two,

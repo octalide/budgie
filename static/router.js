@@ -8,7 +8,7 @@ import { viewSchedules } from './views/schedules.js';
 import { viewRevisions } from './views/revisions.js';
 import { viewEntries } from './views/entries.js';
 import { viewProjection } from './views/projection.js';
-import { viewDashboard } from './views/dashboard.js';
+import { viewDashboard } from './views/dashboard_modular.js';
 import { viewExpenses } from './views/expenses.js';
 
 export async function route() {
