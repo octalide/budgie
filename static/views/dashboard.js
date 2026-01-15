@@ -110,7 +110,7 @@ export async function viewDashboard() {
   };
 
   const computeGridMetrics = () => {
-    if (!grid) return;
+    if (!grid) return null;
     const width = grid.clientWidth || 0;
     const colsRaw = Math.floor((width + GRID_GAP) / (GRID_MIN_COL_WIDTH + GRID_GAP));
     const cols = clamp(colsRaw, GRID_MIN_COLS, GRID_MAX_COLS);
@@ -131,6 +131,7 @@ export async function viewDashboard() {
     grid.style.setProperty('--grid-col-width', `${colWidth}px`);
     grid.style.setProperty('--grid-row-height', `${rowHeight}px`);
     grid.style.setProperty('--grid-gap', `${GRID_GAP}px`);
+    return { width, cols, colWidth, rowHeight };
   };
 
   const clampWidgetToGrid = (instance) => {
@@ -178,7 +179,7 @@ export async function viewDashboard() {
 
   const layoutGrid = () => {
     if (!grid) return;
-    computeGridMetrics();
+    const first = computeGridMetrics();
     assignWidgetPositions(layout.widgets, gridState.cols);
     resolveOverlaps();
     for (const widget of layout.widgets) {
@@ -186,6 +187,19 @@ export async function viewDashboard() {
       positionWidgetElement(widget, el);
     }
     updateGridHeight();
+
+    const widthAfter = grid.clientWidth || 0;
+    if (first && Math.abs(widthAfter - first.width) >= 1) {
+      computeGridMetrics();
+      assignWidgetPositions(layout.widgets, gridState.cols);
+      resolveOverlaps();
+      for (const widget of layout.widgets) {
+        const el = grid.querySelector(`[data-widget-id="${CSS.escape(widget.id)}"]`);
+        positionWidgetElement(widget, el);
+      }
+      updateGridHeight();
+    }
+
     scheduleResize();
   };
 
