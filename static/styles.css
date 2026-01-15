@@ -465,6 +465,7 @@ body.auth-logged-out .sidebar {
     flex-direction: column;
     flex: 1;
     min-height: 0;
+    min-width: 0;
     position: relative;
 }
 
@@ -532,6 +533,7 @@ body.auth-logged-out .sidebar {
 .dashboard .dash-widget-body {
     padding: 12px;
     min-height: 0;
+    min-width: 0;
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -587,6 +589,7 @@ body.auth-logged-out .sidebar {
     flex-direction: column;
     flex: 1;
     min-height: 0;
+    min-width: 0;
 }
 
 .dash-txns {
@@ -594,6 +597,7 @@ body.auth-logged-out .sidebar {
     flex-direction: column;
     flex: 1;
     min-height: 0;
+    min-width: 0;
     gap: 8px;
 }
 
@@ -601,12 +605,17 @@ body.auth-logged-out .sidebar {
 .dash-txns-table .table-wrap {
     flex: 1;
     min-height: 0;
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
     max-height: none;
-    overflow: auto;
+    overflow-x: auto;
+    overflow-y: auto;
 }
 
 .dash-txns-table .table {
-    min-width: 640px;
+    width: max-content;
+    min-width: 100%;
 }
 
 .dash-txns-sub {

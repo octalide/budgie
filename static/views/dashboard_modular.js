@@ -40,6 +40,13 @@ function clamp(n, lo, hi) {
   return Math.max(lo, Math.min(hi, n));
 }
 
+function truncateText(value, max = 36) {
+  const s = String(value ?? '');
+  if (s.length <= max) return { text: s, title: s };
+  const trimmed = s.slice(0, Math.max(0, max - 1)).trimEnd();
+  return { text: `${trimmed}…`, title: s };
+}
+
 function isoToDayNumber(iso) {
   const t = Date.parse(`${iso}T00:00:00Z`);
   if (!Number.isFinite(t)) return NaN;
@@ -121,6 +128,7 @@ const GRID_HEIGHT_MIN = 480;
 const GRID_GAP = 12;
 const GRID_MIN_COLS = 4;
 const GRID_MAX_COLS = 12;
+const NAME_TRUNCATE = 36;
 
 const SIZE_GRID = {
   sm: { w: 3, h: 3 },
@@ -186,6 +194,9 @@ function normalizeWidgetInstance(raw) {
     ...def.defaultConfig,
     ...(raw.config && typeof raw.config === 'object' ? raw.config : {}),
   };
+  if (type === 'projection' && config.showLiabilities === undefined && config.includeLiabilities !== undefined) {
+    config.showLiabilities = Boolean(config.includeLiabilities);
+  }
   return { id, type, size, title, config, x, y, w, h };
 }
 
@@ -376,7 +387,7 @@ function createDashboardContext(asOf, accounts = [], range = null) {
 function createWidgetDefinitions() {
   const upcoming = {
     type: 'upcoming',
-    title: 'Upcoming expenses',
+    title: 'Upcoming Expenses',
     description: 'Scheduled expenses over a configurable window.',
     defaultSize: 'md',
     minW: 2,
@@ -602,7 +613,7 @@ function createWidgetDefinitions() {
 
   const recentExpenses = {
     type: 'recent_expenses',
-    title: 'Recent expenses',
+    title: 'Recent Expenses',
     description: 'Recent expenses including manual entries.',
     defaultSize: 'md',
     minW: 2,
@@ -739,7 +750,7 @@ function createWidgetDefinitions() {
 
   const balanceCard = {
     type: 'balance_card',
-    title: 'Account balance',
+    title: 'Account Balance',
     description: 'Single-account balance card with selection sync.',
     defaultSize: 'md',
     minW: 2,
@@ -806,7 +817,7 @@ function createWidgetDefinitions() {
 
   const recentEntries = {
     type: 'recent_entries',
-    title: 'Recent entries',
+    title: 'Recent Entries',
     description: 'Latest manual entries with account filtering.',
     defaultSize: 'md',
     minW: 2,
@@ -840,7 +851,7 @@ function createWidgetDefinitions() {
 
         const rows = filtered.map((e) => ({
           date: e.entry_date,
-          name: e.name,
+          name: truncateText(e.name, NAME_TRUNCATE),
           amount: {
             text: fmtDollarsAccountingFromCents(Number(e.amount_cents ?? 0)),
             className: Number(e.amount_cents ?? 0) < 0 ? 'num neg mono' : 'num mono',
@@ -873,11 +884,11 @@ function createWidgetDefinitions() {
 
   const projectionTxns = {
     type: 'projection_txns',
-    title: 'Scheduled transactions',
+    title: 'Scheduled Transactions',
     description: 'Scheduled feed linked to the projection selection window.',
     defaultSize: 'md',
-    minW: 2,
-    minH: 2,
+    minW: 1,
+    minH: 1,
     defaultConfig: {
       windowDays: 14,
       syncSelection: true,
@@ -953,7 +964,7 @@ function createWidgetDefinitions() {
         const rows = filtered.map((o) => ({
           date: o.occ_date,
           kind: o.kind,
-          name: o.name,
+          name: truncateText(o.name, NAME_TRUNCATE),
           amount: {
             text: fmtDollarsAccountingFromCents(Number(o.amount_cents ?? 0)),
             className: Number(o.amount_cents ?? 0) < 0 ? 'num neg mono' : 'num mono',
@@ -988,7 +999,7 @@ function createWidgetDefinitions() {
 
   const expensesChart = {
     type: 'expenses_chart',
-    title: 'Expenses chart',
+    title: 'Expenses',
     description: 'Top scheduled expenses over time (cumulative).',
     defaultSize: 'lg',
     minW: 3,
@@ -1266,7 +1277,7 @@ function createWidgetDefinitions() {
       includeInterest: true,
       stepDays: 7,
       monthsAhead: 6,
-      includeLiabilities: false,
+      showLiabilities: false,
       showHidden: false,
       accountId: '',
     },
@@ -1275,7 +1286,7 @@ function createWidgetDefinitions() {
       { key: 'includeInterest', label: 'Include interest', type: 'checkbox' },
       { key: 'stepDays', label: 'Granularity (days)', type: 'number', min: 1, max: 366, step: 1 },
       { key: 'monthsAhead', label: 'Months ahead', type: 'number', min: 1, max: 24, step: 1 },
-      { key: 'includeLiabilities', label: 'Include liabilities', type: 'checkbox' },
+      { key: 'showLiabilities', label: 'Show liabilities', type: 'checkbox' },
       { key: 'showHidden', label: 'Show hidden accounts', type: 'checkbox' },
     ],
     mount({ root, context, instance }) {
@@ -1299,7 +1310,7 @@ function createWidgetDefinitions() {
       const canvas = body.querySelector('canvas.chart');
 
       const state = {
-        selected: new Set(['total', 'net']),
+        selected: new Set(['gross', 'net']),
         lockedIdx: null,
         seriesData: null,
         seriesKey: '',
@@ -1324,18 +1335,19 @@ function createWidgetDefinitions() {
         return clamp(Math.round(idx), 0, n - 1);
       };
 
-      const filteredAccounts = (cfg) => {
+      const filteredAccounts = (cfg, options = {}) => {
         const accounts = state.seriesData?.accounts || [];
         const accountId = cfg.accountId ? Number(cfg.accountId) : null;
+        const includeLiabilities = options.includeLiabilities ?? true;
         return accounts.filter((a) => {
           if (!cfg.showHidden && Number(a.exclude_from_dashboard ?? 0) === 1) return false;
-          if (!cfg.includeLiabilities && Number(a.is_liability ?? 0) === 1) return false;
+          if (!includeLiabilities && Number(a.is_liability ?? 0) === 1) return false;
           if (accountId && Number(a.id) !== accountId) return false;
           return true;
         });
       };
 
-      const computeTotalSeries = (accounts) => {
+      const computeGrossSeries = (accounts) => {
         const dates = state.seriesData?.dates || [];
         const out = new Array(dates.length).fill(0);
         for (const a of accounts || []) {
@@ -1345,15 +1357,13 @@ function createWidgetDefinitions() {
         return out;
       };
 
-      const computeNetSeries = (accountsVisible, cfg) => {
+      const computeNetSeries = (accountsVisible) => {
         const dates = state.seriesData?.dates || [];
         const assets = new Array(dates.length).fill(0);
         const liab = new Array(dates.length).fill(0);
 
         for (const a of accountsVisible || []) {
           const isL = Number(a?.is_liability ?? 0) === 1;
-          if (isL && !cfg.includeLiabilities) continue;
-
           const vals = a.balance_cents || [];
           for (let i = 0; i < dates.length; i++) {
             const v = Number(vals[i] ?? 0);
@@ -1366,21 +1376,21 @@ function createWidgetDefinitions() {
       };
 
       const fixedLineColor = (key) => {
-        if (key === 'total') return 'hsla(210, 15%, 92%, 0.92)';
+        if (key === 'gross') return 'hsla(210, 15%, 92%, 0.92)';
         if (key === 'net') return 'hsla(150, 55%, 74%, 0.92)';
         return stableSeriesColor(String(key), 0.92);
       };
 
       const ensureSelected = (accounts) => {
         if (!state.selected.size) {
-          state.selected.add('total');
+          state.selected.add('gross');
           state.selected.add('net');
         }
         const visible = new Set(accounts.map((a) => String(a.id)));
         for (const key of Array.from(state.selected)) {
-          if (key !== 'total' && key !== 'net' && !visible.has(key)) state.selected.delete(key);
+          if (key !== 'gross' && key !== 'net' && !visible.has(key)) state.selected.delete(key);
         }
-        if (!state.selected.has('total')) state.selected.add('total');
+        if (!state.selected.has('gross')) state.selected.add('gross');
         if (!state.selected.has('net')) state.selected.add('net');
       };
 
@@ -1389,27 +1399,24 @@ function createWidgetDefinitions() {
         const sel = state.selected;
         const series = [];
 
-        const accounts = filteredAccounts(cfg);
-        const visibleAccounts = state.seriesData?.accounts || [];
-        const acctKeys = accounts.map((a) => `acct:${String(a.id)}:${a.name || ''}`);
+        const lineAccounts = filteredAccounts(cfg, { includeLiabilities: Boolean(cfg.showLiabilities) });
+        const grossAccounts = filteredAccounts(cfg, { includeLiabilities: false });
+        const netAccounts = filteredAccounts(cfg, { includeLiabilities: true });
+        const acctKeys = lineAccounts.map((a) => `acct:${String(a.id)}:${a.name || ''}`);
         const palette = distinctSeriesPalette(acctKeys, 0.92, { seed: 'accounts' });
         const colorFor = (key) => {
-          if (key === 'total' || key === 'net') return fixedLineColor(key);
+          if (key === 'gross' || key === 'net') return fixedLineColor(key);
           return palette.get(String(key)) || stableSeriesColor(String(key), 0.92);
         };
 
-        const totalSeries = computeTotalSeries(accounts);
-        const netSource = cfg.accountId ? accounts : visibleAccounts || [];
-        const netSeries = computeNetSeries(
-          netSource.filter((a) => (cfg.showHidden ? true : Number(a.exclude_from_dashboard ?? 0) !== 1)),
-          cfg
-        );
+        const grossSeries = computeGrossSeries(grossAccounts);
+        const netSeries = computeNetSeries(netAccounts);
 
-        if (sel.has('total')) {
+        if (sel.has('gross')) {
           series.push({
-            name: 'Total',
-            values: totalSeries.map((v) => Number(v)),
-            color: colorFor('total'),
+            name: 'Gross',
+            values: grossSeries.map((v) => Number(v)),
+            color: colorFor('gross'),
             width: 3,
           });
         }
@@ -1423,7 +1430,7 @@ function createWidgetDefinitions() {
           });
         }
 
-        accounts.forEach((a) => {
+        lineAccounts.forEach((a) => {
           const id = String(a.id);
           if (!sel.has(id)) return;
           const key = `acct:${id}:${a.name || ''}`;
@@ -1455,14 +1462,15 @@ function createWidgetDefinitions() {
 
       const renderLines = (cfg) => {
         if (!linesBox || !state.seriesData) return;
-        const accounts = filteredAccounts(cfg);
-        const visibleAccounts = state.seriesData?.accounts || [];
-        ensureSelected(accounts);
+        const lineAccounts = filteredAccounts(cfg, { includeLiabilities: Boolean(cfg.showLiabilities) });
+        const grossAccounts = filteredAccounts(cfg, { includeLiabilities: false });
+        const netAccounts = filteredAccounts(cfg, { includeLiabilities: true });
+        ensureSelected(lineAccounts);
 
-        const acctKeys = accounts.map((a) => `acct:${String(a.id)}:${a.name || ''}`);
+        const acctKeys = lineAccounts.map((a) => `acct:${String(a.id)}:${a.name || ''}`);
         const palette = distinctSeriesPalette(acctKeys, 0.92, { seed: 'accounts' });
         const colorFor = (key) => {
-          if (key === 'total' || key === 'net') return fixedLineColor(key);
+          if (key === 'gross' || key === 'net') return fixedLineColor(key);
           return palette.get(String(key)) || stableSeriesColor(String(key), 0.92);
         };
 
@@ -1472,19 +1480,15 @@ function createWidgetDefinitions() {
 
         const valText = (cents) => escapeHtml(fmtDollarsAccountingFromCents(Number(cents ?? 0)));
 
-        const totalSeries = computeTotalSeries(accounts);
-        const netSource = cfg.accountId ? accounts : visibleAccounts || [];
-        const netSeries = computeNetSeries(
-          netSource.filter((a) => (cfg.showHidden ? true : Number(a.exclude_from_dashboard ?? 0) !== 1)),
-          cfg
-        );
+        const grossSeries = computeGrossSeries(grossAccounts);
+        const netSeries = computeNetSeries(netAccounts);
         const lines = [];
         lines.push(
           `<label class="chart-line">
-            <input type="checkbox" data-line="total" ${state.selected.has('total') ? 'checked' : ''} />
-            <span class="chart-swatch" style="background:${colorFor('total')}"></span>
-            <span>Total</span>
-            <span class="chart-line-val mono" title="${escapeHtml(date)}">${valText(totalSeries[idx] ?? 0)}</span>
+            <input type="checkbox" data-line="gross" ${state.selected.has('gross') ? 'checked' : ''} />
+            <span class="chart-swatch" style="background:${colorFor('gross')}"></span>
+            <span title="assets only">Gross</span>
+            <span class="chart-line-val mono" title="${escapeHtml(date)}">${valText(grossSeries[idx] ?? 0)}</span>
           </label>`
         );
         lines.push(
@@ -1496,7 +1500,7 @@ function createWidgetDefinitions() {
           </label>`
         );
 
-        accounts.forEach((a) => {
+        lineAccounts.forEach((a) => {
           const id = String(a.id);
           const key = `acct:${id}:${a.name || ''}`;
           const v = (a.balance_cents || [])[idx] ?? 0;
@@ -1522,15 +1526,15 @@ function createWidgetDefinitions() {
         const noneBtn = linesBox.querySelector('[data-lines-none]');
         allBtn.onclick = () => {
           state.selected.clear();
-          state.selected.add('total');
+          state.selected.add('gross');
           state.selected.add('net');
-          for (const a of accounts) state.selected.add(String(a.id));
+          for (const a of lineAccounts) state.selected.add(String(a.id));
           renderLines(cfg);
           redraw(cfg);
         };
         noneBtn.onclick = () => {
           state.selected.clear();
-          state.selected.add('total');
+          state.selected.add('gross');
           state.selected.add('net');
           renderLines(cfg);
           redraw(cfg);
@@ -1571,10 +1575,10 @@ function createWidgetDefinitions() {
             includeInterest: Boolean(cfg.includeInterest),
           });
           state.selected.clear();
-          state.selected.add('total');
+          state.selected.add('gross');
           state.selected.add('net');
-          const accounts = filteredAccounts(cfg);
-          for (const a of accounts) state.selected.add(String(a.id));
+          const lineAccounts = filteredAccounts(cfg, { includeLiabilities: Boolean(cfg.showLiabilities) });
+          for (const a of lineAccounts) state.selected.add(String(a.id));
         }
 
         updateSelectionLabel();
