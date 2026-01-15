@@ -1619,11 +1619,11 @@ function createWidgetDefinitions() {
         resize,
         destroy() {
           selectionUnsub();
+          rangeUnsub();
           window.removeEventListener('resize', onResize);
         },
       };
     },
-          rangeUnsub();
   };
 
   const defs = [upcoming, recentExpenses, snapshot, balanceCard, recentEntries, projectionTxns, expensesChart, projection];
