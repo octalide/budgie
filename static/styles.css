@@ -56,6 +56,24 @@ a {
     border-bottom: 1px solid var(--border);
 }
 
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.brand__logo {
+    width: 24px;
+    height: 24px;
+    flex: 0 0 auto;
+    display: block;
+}
+
+.brand__text {
+    display: flex;
+    flex-direction: column;
+}
+
 .brand__title {
     font-weight: 650;
     letter-spacing: 0.3px;
