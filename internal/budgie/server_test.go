@@ -1,47 +1,11 @@
 package budgie
 
 import (
-	"database/sql"
-	"os"
-	"path/filepath"
-	"runtime"
 	"testing"
-
-	_ "github.com/mattn/go-sqlite3"
 )
 
-func mustReadRepoFile(t *testing.T, relFromRepoRoot string) []byte {
-	t.Helper()
-
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatalf("runtime.Caller failed")
-	}
-
-	// This test file lives at <repo>/internal/budgie/server_test.go.
-	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
-	b, err := os.ReadFile(filepath.Join(repoRoot, relFromRepoRoot))
-	if err != nil {
-		t.Fatalf("read %s: %v", relFromRepoRoot, err)
-	}
-	return b
-}
-
 func TestProjectedBalancesAsOf_ScanMatchesQuery(t *testing.T) {
-	db, err := sql.Open("sqlite3", ":memory:")
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-
-	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
-		t.Fatalf("pragma foreign_keys: %v", err)
-	}
-
-	schema := mustReadRepoFile(t, "schema.sql")
-	if _, err := db.Exec(string(schema)); err != nil {
-		t.Fatalf("apply schema: %v", err)
-	}
+	db := newTestDB(t)
 
 	// Minimal data: one account, no entries, no schedules.
 	res, err := db.Exec(`
