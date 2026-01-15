@@ -241,6 +241,16 @@ CREATE TABLE IF NOT EXISTS user_oidc_identity (
   FOREIGN KEY (user_id) REFERENCES user(id) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
+-- ----
+-- Dashboard layouts
+-- ----
+CREATE TABLE IF NOT EXISTS dashboard_layout (
+  id          INTEGER PRIMARY KEY,
+  owner_key   TEXT    NOT NULL UNIQUE,
+  layout_json TEXT    NOT NULL,
+  updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS auth_session (
   id            TEXT    PRIMARY KEY,
   user_id       INTEGER NOT NULL,

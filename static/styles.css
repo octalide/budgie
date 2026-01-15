@@ -344,28 +344,284 @@ body.auth-logged-out .sidebar {
     min-height: 0;
 }
 
-/* Dashboard: use available viewport height and avoid wasted space. */
+/* Dashboard: modular widget grid. */
 .dashboard {
     height: 100%;
     min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow: hidden;
 }
 
-.dashboard > .card {
-    height: 100%;
+.dash-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
 }
 
-.dashboard > .card > .card__body {
+.dash-title {
+    font-weight: 650;
+    letter-spacing: 0.2px;
+}
+
+.dash-subtitle {
+    margin-top: 3px;
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.dash-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.dash-range {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px;
+    border: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.dash-range input {
+    width: 120px;
+    padding: 6px 8px;
+    font-size: 12px;
+}
+
+.dash-range button {
+    padding: 6px 8px;
+    font-size: 12px;
+}
+
+.dash-range span {
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.dash-actions button {
+    padding: 6px 10px;
+    font-size: 12px;
+}
+
+.dashboard:not(.edit-mode) #dash_reset {
+    display: none;
+}
+
+.dashboard:not(.edit-mode) #dash_add {
+    display: none;
+}
+
+.dashboard .dash-grid {
     flex: 1;
     min-height: 0;
+    position: relative;
+    overflow: auto;
+    padding-bottom: 12px;
+}
+
+
+.dashboard .dash-widget {
+    position: absolute;
+    display: flex;
+    min-width: var(--grid-col-width, 140px);
+    min-height: var(--grid-row-height, 80px);
+    z-index: 1;
+}
+
+.dashboard.edit-mode .dash-widget {
+    cursor: grab;
+}
+
+.dashboard.edit-mode .dash-widget:active {
+    cursor: grabbing;
+}
+
+.dashboard .dash-widget.dragging {
+    opacity: 0.6;
+}
+
+.dashboard .dash-widget.size-sm {
+    --widget-min-height: 220px;
+}
+
+.dashboard .dash-widget.size-md {
+    --widget-min-height: 300px;
+}
+
+.dashboard .dash-widget.size-lg {
+    --widget-min-height: 420px;
+}
+
+.dashboard .dash-widget-card {
+    border: 1px solid var(--border);
+    background: var(--panel);
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    position: relative;
+}
+
+.dashboard .dash-widget-head {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.dashboard .dash-widget-handle {
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: 1px;
+    user-select: none;
+    cursor: grab;
+    padding: 2px 4px;
+    border: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.dashboard.edit-mode .dash-widget-handle:active {
+    cursor: grabbing;
+}
+
+.dashboard .dash-widget-title {
+    font-weight: 600;
+}
+
+.dashboard .dash-widget-actions {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.dashboard .dash-widget-actions button {
+    padding: 4px 8px;
+    font-size: 12px;
+}
+
+.dashboard:not(.edit-mode) .dash-widget-actions {
+    display: none;
+}
+
+.dashboard .dash-widget-resize {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    width: 14px;
+    height: 14px;
+    border-right: 2px solid var(--muted);
+    border-bottom: 2px solid var(--muted);
+    cursor: nwse-resize;
+    opacity: 0.8;
+}
+
+.dashboard:not(.edit-mode) .dash-widget-resize,
+.dashboard:not(.edit-mode) .dash-widget-handle {
+    opacity: 0;
+    pointer-events: none;
+}
+
+.dashboard .dash-widget-body {
+    padding: 12px;
+    min-height: 0;
+    min-width: 0;
     overflow: hidden;
     display: flex;
     flex-direction: column;
 }
 
-.dashboard .dash-split {
+.dash-settings-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.dash-settings-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.dashboard .dash-widget-body .dash-upcoming {
     flex: 1;
-    height: 100%;
     min-height: 0;
+}
+
+.dash-balance-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex: 1;
+    min-height: 0;
+    justify-content: center;
+}
+
+.dash-balance-title {
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.dash-balance-value {
+    font-size: 28px;
+    font-weight: 600;
+}
+
+.dash-balance-sub {
+    font-size: 11px;
+    color: var(--muted);
+}
+
+.dash-entries,
+.dash-txns-table {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+}
+
+.dash-txns {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    gap: 8px;
+}
+
+.dash-entries .table-wrap,
+.dash-txns-table .table-wrap {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
+    max-height: none;
+    overflow-x: auto;
+    overflow-y: auto;
+}
+
+.dash-txns-table .table {
+    width: max-content;
+    min-width: 100%;
+}
+
+.dash-txns-sub {
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 8px;
 }
 
 .dashboard .dash-split > .card {
@@ -450,7 +706,8 @@ body.auth-logged-out .sidebar {
 
 /* When Upcoming is inside a fixed-height card body, fill the remaining space so
    the list can scroll instead of growing the page. */
-.dashboard .dash-left-upcoming .dash-upcoming {
+.dashboard .dash-left-upcoming .dash-upcoming,
+.dashboard .dash-upcoming {
     flex: 1;
 }
 
@@ -490,7 +747,7 @@ body.auth-logged-out .sidebar {
 
 .dash-upcoming-row {
     display: grid;
-    grid-template-columns: 90px 1fr 1fr 110px;
+    grid-template-columns: 90px 1fr 1fr 110px 70px;
     gap: 10px;
     align-items: center;
     font-size: 12px;
@@ -513,10 +770,32 @@ body.auth-logged-out .sidebar {
     color: var(--text);
 }
 
+.dash-upcoming-kind {
+    text-align: right;
+    color: var(--muted);
+    font-size: 11px;
+}
+
 .dash-upcoming-more {
     margin-top: 8px;
     font-size: 12px;
     color: var(--muted);
+}
+
+.dash-widget-picker {
+    border: 1px solid var(--border);
+    background: rgba(0, 0, 0, 0.12);
+    padding: 10px;
+}
+
+.dash-widget-picker__title {
+    font-weight: 600;
+}
+
+.dash-widget-picker__sub {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 4px;
 }
 
 .dash-snapshot-table {
@@ -543,13 +822,32 @@ body.auth-logged-out .sidebar {
     flex: 1;
 }
 
-.dash-projection-chart {
+.dash-expenses {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 0;
     flex: 1;
-    min-height: 220px;
 }
 
-.dashboard .chart.chart--small {
-    height: clamp(220px, 46vh, 520px);
+.dash-projection-chart {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-bottom: 6px;
+}
+
+.dash-projection-chart label {
+    flex: 0 0 auto;
+}
+
+.dashboard .dash-projection-chart .chart {
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+    width: 100%;
 }
 
 /* Projection: horizontal filter bar + 2:1 chart/transactions split. */

@@ -31,4 +31,5 @@ func RegisterAPI(mux *http.ServeMux, db *sql.DB, auth *AuthService) {
 	mux.HandleFunc("/api/occurrences", requireAuth(srv.occurrences))
 	mux.HandleFunc("/api/balances", requireAuth(srv.balances))
 	mux.HandleFunc("/api/balances/series", requireAuth(srv.balancesSeries))
+	mux.HandleFunc("/api/dashboard/layout", requireAuth(srv.dashboardLayout))
 }
