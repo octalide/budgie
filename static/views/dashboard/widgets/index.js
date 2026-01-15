@@ -7,8 +7,9 @@ import { projectionTxns } from './projection_txns.js';
 import { expensesChart } from './expenses_chart.js';
 import { projection } from './projection.js';
 import { actuals } from './actuals.js';
+import { cashflow } from './cashflow.js';
 
 export function createWidgetDefinitions() {
-  const defs = [upcoming, recentExpenses, snapshot, balanceCard, recentEntries, projectionTxns, expensesChart, projection, actuals];
+  const defs = [upcoming, recentExpenses, snapshot, balanceCard, recentEntries, projectionTxns, expensesChart, projection, actuals, cashflow];
   return Object.fromEntries(defs.map((def) => [def.type, def]));
 }
