@@ -22,6 +22,11 @@ func TestInterestForPeriodCents(t *testing.T) {
 		t.Fatalf("expected negative interest, got %d", neg)
 	}
 
+	big := interestForPeriodCents(10000, 10000, "D", 365)
+	if big < 10000 {
+		t.Fatalf("expected sizable interest for 100%% APR, got %d", big)
+	}
+
 	daily := interestForPeriodCents(10000000, 2400, "D", 45)
 	monthly := interestForPeriodCents(10000000, 2400, "M", 45)
 	if daily == monthly {
