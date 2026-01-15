@@ -493,21 +493,73 @@ func (s *server) entryByID(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, notFound("not found"))
 		return
 	}
-	if r.Method != http.MethodDelete {
+
+	switch r.Method {
+	case http.MethodPut:
+		var body struct {
+			EntryDate     string  `json:"entry_date"`
+			Name          string  `json:"name"`
+			AmountCents   int64   `json:"amount_cents"`
+			SrcAccountID  *int64  `json:"src_account_id"`
+			DestAccountID *int64  `json:"dest_account_id"`
+			ScheduleID    *int64  `json:"schedule_id"`
+			Description   *string `json:"description"`
+		}
+		if e := readJSON(r, &body); e != nil {
+			writeErr(w, e)
+			return
+		}
+		ed, e := requireDate(body.EntryDate, "entry_date")
+		if e != nil {
+			writeErr(w, e)
+			return
+		}
+		if strings.TrimSpace(body.Name) == "" {
+			writeErr(w, badRequest("name is required", nil))
+			return
+		}
+		if body.AmountCents <= 0 {
+			writeErr(w, badRequest("amount_cents must be > 0", nil))
+			return
+		}
+		if body.SrcAccountID == nil && body.DestAccountID == nil {
+			writeErr(w, badRequest("must set src_account_id and/or dest_account_id", nil))
+			return
+		}
+		if body.SrcAccountID != nil && body.DestAccountID != nil && *body.SrcAccountID == *body.DestAccountID {
+			writeErr(w, badRequest("src_account_id and dest_account_id must differ", nil))
+			return
+		}
+
+		_, err := s.db.Exec(
+			"UPDATE entry SET entry_date=?, name=?, amount_cents=?, src_account_id=?, dest_account_id=?, description=?, schedule_id=? WHERE id = ?",
+			ed, strings.TrimSpace(body.Name), body.AmountCents, body.SrcAccountID, body.DestAccountID, body.Description, body.ScheduleID, id,
+		)
+		if err != nil {
+			writeErr(w, badRequest("could not update entry", map[string]any{"sqlite": err.Error()}))
+			return
+		}
+		updated, apiE := scanRowToMap(s.db, "entry", id)
+		if apiE != nil {
+			writeErr(w, apiE)
+			return
+		}
+		writeOK(w, updated)
+	case http.MethodDelete:
+		res, err := s.db.Exec("DELETE FROM entry WHERE id = ?", id)
+		if err != nil {
+			writeErr(w, badRequest("could not delete entry", map[string]any{"sqlite": err.Error()}))
+			return
+		}
+		affected, _ := res.RowsAffected()
+		if affected == 0 {
+			writeErr(w, notFound("entry not found"))
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true})
+	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
 	}
-	res, err := s.db.Exec("DELETE FROM entry WHERE id = ?", id)
-	if err != nil {
-		writeErr(w, badRequest("could not delete entry", map[string]any{"sqlite": err.Error()}))
-		return
-	}
-	affected, _ := res.RowsAffected()
-	if affected == 0 {
-		writeErr(w, notFound("entry not found"))
-		return
-	}
-	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
 func (s *server) occurrences(w http.ResponseWriter, r *http.Request) {
