@@ -57,13 +57,27 @@ function createEmitter() {
   };
 }
 
+const GRID_MIN_COL_WIDTH = 160;
+const GRID_ROW_RATIO = 0.65;
+const GRID_ROW_MIN = 84;
+const GRID_ROW_MAX = 160;
+const GRID_GAP = 12;
+const GRID_MIN_COLS = 4;
+const GRID_MAX_COLS = 12;
+
+const SIZE_GRID = {
+  sm: { w: 3, h: 3 },
+  md: { w: 4, h: 4 },
+  lg: { w: 6, h: 6 },
+};
+
 const WIDGET_SIZES = [
   { value: 'sm', label: 'Small' },
   { value: 'md', label: 'Medium' },
   { value: 'lg', label: 'Large' },
 ];
 
-const DASHBOARD_LAYOUT_VERSION = 2;
+const DASHBOARD_LAYOUT_VERSION = 3;
 
 const WIDGET_DEFS = createWidgetDefinitions();
 
@@ -77,7 +91,11 @@ function newWidgetId(prefix) {
 function normalizeLayout(raw) {
   if (raw && raw.version === DASHBOARD_LAYOUT_VERSION && Array.isArray(raw.widgets)) {
     const widgets = normalizeWidgets(raw.widgets);
-    if (widgets.length) return { version: DASHBOARD_LAYOUT_VERSION, widgets };
+    if (widgets.length) return { version: DASHBOARD_LAYOUT_VERSION, widgets: assignWidgetPositions(widgets) };
+  }
+  if (raw && raw.version === 2 && Array.isArray(raw.widgets)) {
+    const widgets = normalizeWidgets(raw.widgets);
+    if (widgets.length) return { version: DASHBOARD_LAYOUT_VERSION, widgets: assignWidgetPositions(widgets) };
   }
   if (raw && typeof raw === 'object' && raw.positions) {
     return migrateLegacyLayout(raw);
@@ -106,11 +124,50 @@ function normalizeWidgetInstance(raw) {
   const id = raw.id ? String(raw.id) : newWidgetId(type);
   const size = WIDGET_SIZES.some((s) => s.value === raw.size) ? raw.size : def.defaultSize;
   const title = typeof raw.title === 'string' && raw.title.trim() ? raw.title.trim() : def.title;
+  const dims = SIZE_GRID[size] || SIZE_GRID[def.defaultSize] || { w: 4, h: 4 };
+  const minW = def.minW || 2;
+  const minH = def.minH || 2;
+  const w = clamp(asInt(raw.w, dims.w), minW, 99);
+  const h = clamp(asInt(raw.h, dims.h), minH, 99);
+  const x = Number.isFinite(raw.x) ? Math.max(0, Math.floor(raw.x)) : null;
+  const y = Number.isFinite(raw.y) ? Math.max(0, Math.floor(raw.y)) : null;
   const config = {
     ...def.defaultConfig,
     ...(raw.config && typeof raw.config === 'object' ? raw.config : {}),
   };
-  return { id, type, size, title, config };
+  return { id, type, size, title, config, x, y, w, h };
+}
+
+function rectsOverlap(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+function findNextSpot(widget, placed, cols) {
+  const w = clamp(widget.w, 1, cols);
+  const h = Math.max(1, widget.h);
+  let y = 0;
+  while (y < 500) {
+    for (let x = 0; x <= cols - w; x += 1) {
+      const candidate = { x, y, w, h };
+      const hit = placed.some((p) => rectsOverlap(candidate, p));
+      if (!hit) return { x, y };
+    }
+    y += 1;
+  }
+  return { x: 0, y: y };
+}
+
+function assignWidgetPositions(widgets, cols = GRID_MAX_COLS) {
+  const placed = [];
+  for (const widget of widgets) {
+    if (!Number.isFinite(widget.x) || !Number.isFinite(widget.y)) {
+      const pos = findNextSpot(widget, placed, cols);
+      widget.x = pos.x;
+      widget.y = pos.y;
+    }
+    placed.push({ x: widget.x, y: widget.y, w: widget.w, h: widget.h });
+  }
+  return widgets;
 }
 
 function migrateLegacyLayout(raw) {
@@ -124,14 +181,22 @@ function migrateLegacyLayout(raw) {
   const widgets = order
     .map((pos, idx) => posToWidget[pos] || fallback[idx])
     .filter((type) => WIDGET_DEFS[type])
-    .map((type) => ({
-      id: newWidgetId(type),
-      type,
-      size: WIDGET_DEFS[type].defaultSize,
-      title: WIDGET_DEFS[type].title,
-      config: { ...WIDGET_DEFS[type].defaultConfig },
-    }));
-  return { version: DASHBOARD_LAYOUT_VERSION, widgets };
+    .map((type) => {
+      const def = WIDGET_DEFS[type];
+      const dims = SIZE_GRID[def.defaultSize] || { w: 4, h: 4 };
+      return {
+        id: newWidgetId(type),
+        type,
+        size: def.defaultSize,
+        title: def.title,
+        config: { ...def.defaultConfig },
+        x: null,
+        y: null,
+        w: dims.w,
+        h: dims.h,
+      };
+    });
+  return { version: DASHBOARD_LAYOUT_VERSION, widgets: assignWidgetPositions(widgets) };
 }
 
 function createDefaultLayout() {
@@ -140,27 +205,35 @@ function createDefaultLayout() {
     { type: 'snapshot', size: 'md' },
     { type: 'projection', size: 'lg' },
   ];
+  const widgets = defaults.map((entry) => {
+    const def = WIDGET_DEFS[entry.type];
+    const size = entry.size || def.defaultSize;
+    const dims = SIZE_GRID[size] || SIZE_GRID[def.defaultSize] || { w: 4, h: 4 };
+    return {
+      id: newWidgetId(entry.type),
+      type: entry.type,
+      size,
+      title: def.title,
+      config: { ...def.defaultConfig },
+      x: null,
+      y: null,
+      w: dims.w,
+      h: dims.h,
+    };
+  });
   return {
     version: DASHBOARD_LAYOUT_VERSION,
-    widgets: defaults.map((entry) => {
-      const def = WIDGET_DEFS[entry.type];
-      return {
-        id: newWidgetId(entry.type),
-        type: entry.type,
-        size: entry.size || def.defaultSize,
-        title: def.title,
-        config: { ...def.defaultConfig },
-      };
-    }),
+    widgets: assignWidgetPositions(widgets),
   };
 }
 
-function createDashboardContext(asOf) {
+function createDashboardContext(asOf, accounts = []) {
   const emitter = createEmitter();
   const balancesCache = new Map();
   const seriesCache = new Map();
   const occurrencesCache = new Map();
   let accountMeta = new Map();
+  const accountById = new Map((accounts || []).map((a) => [Number(a.id), a]));
 
   const context = {
     asOf,
@@ -206,6 +279,8 @@ function createDashboardContext(asOf) {
       occurrencesCache.set(key, data);
       return data;
     },
+    accounts,
+    accountById,
     async getAccountMeta() {
       if (accountMeta.size) return accountMeta;
       await context.getBalances(asOf);
@@ -222,13 +297,17 @@ function createWidgetDefinitions() {
     title: 'Upcoming expenses',
     description: 'Scheduled expenses over a configurable window.',
     defaultSize: 'md',
+    minW: 2,
+    minH: 2,
     defaultConfig: {
       days: 7,
       maxRows: 7,
       syncSelection: true,
       showHidden: false,
+      accountId: '',
     },
     settings: [
+      { key: 'accountId', label: 'Account', type: 'account' },
       { key: 'days', label: 'Window (days)', type: 'number', min: 1, max: 365, step: 1 },
       { key: 'maxRows', label: 'Max rows', type: 'number', min: 1, max: 50, step: 1 },
       { key: 'syncSelection', label: 'Sync to selection', type: 'checkbox' },
@@ -243,27 +322,30 @@ function createWidgetDefinitions() {
         const cfg = { ...upcoming.defaultConfig, ...(instance.config || {}) };
         const days = clamp(asInt(cfg.days, 7), 1, 365);
         const maxRows = clamp(asInt(cfg.maxRows, 7), 1, 50);
+        const accountId = cfg.accountId ? Number(cfg.accountId) : null;
         const baseDate = cfg.syncSelection && context.selection?.locked ? context.selection.date : context.asOf;
         const toDate = addDaysISO(baseDate, days);
 
         const occ = await context.getOccurrences(baseDate, toDate);
         const meta = await context.getAccountMeta();
+        const accountLookup = context.accountById;
 
         const acctName = (id) => {
           if (id === null || id === undefined || id === '') return '';
           const n = Number(id);
           if (!Number.isFinite(n)) return '';
-          return meta.get(n)?.name || String(id);
+          return meta.get(n)?.name || accountLookup.get(n)?.name || String(id);
         };
         const isHidden = (id) => {
           if (id === null || id === undefined || id === '') return false;
           const n = Number(id);
           if (!Number.isFinite(n)) return false;
-          return Number(meta.get(n)?.exclude_from_dashboard ?? 0) === 1;
+          return Number(meta.get(n)?.exclude_from_dashboard ?? accountLookup.get(n)?.exclude_from_dashboard ?? 0) === 1;
         };
 
         const filtered = (occ || [])
           .filter((o) => String(o?.kind || '') === 'E')
+          .filter((o) => (!accountId ? true : Number(o?.src_account_id) === accountId))
           .filter((o) => (cfg.showHidden ? true : !isHidden(o?.src_account_id)));
 
         filtered.sort((a, b) => {
@@ -330,12 +412,16 @@ function createWidgetDefinitions() {
     title: 'Snapshot',
     description: 'Balances as-of a specific date.',
     defaultSize: 'md',
+    minW: 2,
+    minH: 2,
     defaultConfig: {
       includeLiabilities: false,
       showHidden: false,
       syncSelection: true,
+      accountId: '',
     },
     settings: [
+      { key: 'accountId', label: 'Account', type: 'account' },
       { key: 'includeLiabilities', label: 'Include liabilities', type: 'checkbox' },
       { key: 'showHidden', label: 'Show hidden accounts', type: 'checkbox' },
       { key: 'syncSelection', label: 'Sync to selection', type: 'checkbox' },
@@ -356,6 +442,7 @@ function createWidgetDefinitions() {
         const cfg = { ...snapshot.defaultConfig, ...(instance.config || {}) };
         const baseDate = cfg.syncSelection && context.selection?.locked ? context.selection.date : context.asOf;
         const balancesAll = await context.getBalances(baseDate);
+        const accountId = cfg.accountId ? Number(cfg.accountId) : null;
 
         const isLiability = (r) => Number(r?.is_liability ?? 0) === 1;
         const isHidden = (r) => Number(r?.exclude_from_dashboard ?? 0) === 1;
@@ -363,6 +450,7 @@ function createWidgetDefinitions() {
         const balances = (balancesAll || []).filter((r) => {
           if (!cfg.showHidden && isHidden(r)) return false;
           if (!cfg.includeLiabilities && isLiability(r)) return false;
+          if (accountId && Number(r.id) !== accountId) return false;
           return true;
         });
 
@@ -429,14 +517,18 @@ function createWidgetDefinitions() {
     title: 'Projection',
     description: 'Projected balances and selectable lines.',
     defaultSize: 'lg',
+    minW: 3,
+    minH: 3,
     defaultConfig: {
       includeInterest: true,
       stepDays: 7,
       monthsAhead: 6,
       includeLiabilities: false,
       showHidden: false,
+      accountId: '',
     },
     settings: [
+      { key: 'accountId', label: 'Account', type: 'account' },
       { key: 'includeInterest', label: 'Include interest', type: 'checkbox' },
       { key: 'stepDays', label: 'Granularity (days)', type: 'number', min: 1, max: 366, step: 1 },
       { key: 'monthsAhead', label: 'Months ahead', type: 'number', min: 1, max: 24, step: 1 },
@@ -491,9 +583,11 @@ function createWidgetDefinitions() {
 
       const filteredAccounts = (cfg) => {
         const accounts = state.seriesData?.accounts || [];
+        const accountId = cfg.accountId ? Number(cfg.accountId) : null;
         return accounts.filter((a) => {
           if (!cfg.showHidden && Number(a.exclude_from_dashboard ?? 0) === 1) return false;
           if (!cfg.includeLiabilities && Number(a.is_liability ?? 0) === 1) return false;
+          if (accountId && Number(a.id) !== accountId) return false;
           return true;
         });
       };
@@ -719,7 +813,7 @@ function createWidgetDefinitions() {
   return { upcoming, snapshot, projection };
 }
 
-function widgetSettingsForm(def, instance) {
+function widgetSettingsForm(def, instance, accounts = []) {
   const config = { ...def.defaultConfig, ...(instance.config || {}) };
   const sizeValue = WIDGET_SIZES.some((s) => s.value === instance.size) ? instance.size : def.defaultSize;
   const fields = def.settings
@@ -754,6 +848,22 @@ function widgetSettingsForm(def, instance) {
           </div>
         `;
       }
+      if (field.type === 'account') {
+        const opts = ['<option value="">Any account</option>']
+          .concat(
+            (accounts || []).map(
+              (a) =>
+                `<option value="${escapeHtml(String(a.id))}" ${String(config[field.key]) === String(a.id) ? 'selected' : ''}>${escapeHtml(a.name || String(a.id))}</option>`
+            )
+          )
+          .join('');
+        return `
+          <div>
+            <label>${field.label}</label>
+            <select id="${id}">${opts}</select>
+          </div>
+        `;
+      }
       return '';
     })
     .join('');
@@ -784,7 +894,9 @@ export async function viewDashboard() {
 
   const asOf = isoToday();
   const toDate = addMonthsISO(asOf, 6);
-  const context = createDashboardContext(asOf);
+  const accountsRes = await api('/api/accounts');
+  const accounts = accountsRes.data || [];
+  const context = createDashboardContext(asOf, accounts);
 
   let layout = createDefaultLayout();
   try {
@@ -814,7 +926,14 @@ export async function viewDashboard() {
   const root = $('#dashboard_root');
   const grid = $('#dash_grid');
   const controllers = new Map();
+  const gridState = {
+    cols: GRID_MAX_COLS,
+    colWidth: GRID_MIN_COL_WIDTH,
+    rowHeight: GRID_ROW_MIN,
+    gap: GRID_GAP,
+  };
   let editMode = false;
+  let activeAction = null;
 
   const saveLayout = async () => {
     try {
@@ -825,6 +944,86 @@ export async function viewDashboard() {
     } catch {
       // ignore layout save errors
     }
+  };
+
+  const getConstraints = (instance) => {
+    const def = WIDGET_DEFS[instance.type];
+    return {
+      minW: def?.minW || 2,
+      minH: def?.minH || 2,
+    };
+  };
+
+  const computeGridMetrics = () => {
+    if (!grid) return;
+    const width = grid.clientWidth || 0;
+    const colsRaw = Math.floor((width + GRID_GAP) / (GRID_MIN_COL_WIDTH + GRID_GAP));
+    const cols = clamp(colsRaw, GRID_MIN_COLS, GRID_MAX_COLS);
+    const colWidth = Math.max(80, Math.floor((width - GRID_GAP * (cols - 1)) / cols));
+    const baseRow = Math.round(colWidth * GRID_ROW_RATIO);
+    const rowHeight = clamp(Math.round(baseRow / 4) * 4, GRID_ROW_MIN, GRID_ROW_MAX);
+    gridState.cols = cols;
+    gridState.colWidth = colWidth;
+    gridState.rowHeight = rowHeight;
+    gridState.gap = GRID_GAP;
+    grid.style.setProperty('--grid-col-width', `${colWidth}px`);
+    grid.style.setProperty('--grid-row-height', `${rowHeight}px`);
+    grid.style.setProperty('--grid-gap', `${GRID_GAP}px`);
+  };
+
+  const clampWidgetToGrid = (instance) => {
+    const { minW, minH } = getConstraints(instance);
+    const cols = gridState.cols || GRID_MAX_COLS;
+    instance.w = clamp(asInt(instance.w, minW), minW, cols);
+    instance.h = clamp(asInt(instance.h, minH), minH, 99);
+    instance.x = clamp(asInt(instance.x, 0), 0, Math.max(0, cols - instance.w));
+    instance.y = Math.max(0, asInt(instance.y, 0));
+  };
+
+  const resolveOverlaps = () => {
+    const placed = [];
+    const widgets = [...layout.widgets].sort((a, b) => (a.y ?? 0) - (b.y ?? 0) || (a.x ?? 0) - (b.x ?? 0));
+    for (const widget of widgets) {
+      clampWidgetToGrid(widget);
+      while (placed.some((p) => rectsOverlap(widget, p))) {
+        const collisions = placed.filter((p) => rectsOverlap(widget, p));
+        const bottom = Math.max(...collisions.map((p) => p.y + p.h));
+        widget.y = bottom;
+      }
+      placed.push({ x: widget.x, y: widget.y, w: widget.w, h: widget.h });
+    }
+  };
+
+  const updateGridHeight = () => {
+    if (!grid) return;
+    const maxY = layout.widgets.reduce((acc, w) => Math.max(acc, (w.y || 0) + (w.h || 1)), 1);
+    const height = Math.max(1, maxY) * (gridState.rowHeight + gridState.gap) - gridState.gap;
+    grid.style.height = `${Math.max(height, gridState.rowHeight)}px`;
+  };
+
+  const positionWidgetElement = (instance, element) => {
+    if (!element) return;
+    const { colWidth, rowHeight, gap } = gridState;
+    const left = (instance.x || 0) * (colWidth + gap);
+    const top = (instance.y || 0) * (rowHeight + gap);
+    const width = (instance.w || 1) * colWidth + ((instance.w || 1) - 1) * gap;
+    const height = (instance.h || 1) * rowHeight + ((instance.h || 1) - 1) * gap;
+    element.style.left = `${left}px`;
+    element.style.top = `${top}px`;
+    element.style.width = `${width}px`;
+    element.style.height = `${height}px`;
+  };
+
+  const layoutGrid = () => {
+    if (!grid) return;
+    computeGridMetrics();
+    assignWidgetPositions(layout.widgets, gridState.cols);
+    resolveOverlaps();
+    for (const widget of layout.widgets) {
+      const el = grid.querySelector(`[data-widget-id="${CSS.escape(widget.id)}"]`);
+      positionWidgetElement(widget, el);
+    }
+    updateGridHeight();
   };
 
   const destroyWidgets = () => {
@@ -855,6 +1054,7 @@ export async function viewDashboard() {
             </div>
           </div>
           <div class="dash-widget-body"></div>
+          <div class="dash-widget-resize" title="Resize"></div>
         </div>
       `;
 
@@ -868,8 +1068,10 @@ export async function viewDashboard() {
       controllers.set(instance.id, controller);
     }
 
-    wireDragAndDrop();
+    wireWidgetInteractions();
     applyEditMode();
+
+    requestAnimationFrame(() => layoutGrid());
 
     await Promise.all(Array.from(controllers.values()).map((ctrl) => ctrl?.update?.()));
   };
@@ -877,11 +1079,6 @@ export async function viewDashboard() {
   const applyEditMode = () => {
     if (!root) return;
     root.classList.toggle('edit-mode', editMode);
-    grid.querySelectorAll('.dash-widget').forEach((widget) => {
-      widget.setAttribute('draggable', 'false');
-      const handle = widget.querySelector('.dash-widget-handle');
-      if (handle) handle.setAttribute('draggable', editMode ? 'true' : 'false');
-    });
     const editBtn = $('#dash_edit');
     if (editBtn) editBtn.textContent = editMode ? 'Done' : 'Edit layout';
   };
@@ -930,7 +1127,7 @@ export async function viewDashboard() {
     const { root: modalRoot, close } = showModal({
       title: `Edit ${def.title}`,
       subtitle: 'Update widget configuration',
-      bodyHtml: widgetSettingsForm(def, instance),
+      bodyHtml: widgetSettingsForm(def, instance, accounts),
     });
 
     const saveBtn = modalRoot.querySelector('#ws_save');
@@ -959,14 +1156,26 @@ export async function viewDashboard() {
             newConfig[field.key] = clamp(val, field.min ?? val, field.max ?? val);
           } else if (field.type === 'select') {
             newConfig[field.key] = el.value;
+          } else if (field.type === 'account') {
+            newConfig[field.key] = el.value || '';
           }
         }
 
+        const nextSize = sizeSel?.value && WIDGET_SIZES.some((s) => s.value === sizeSel.value) ? sizeSel.value : def.defaultSize;
+        const sizeChanged = instance.size !== nextSize;
         instance.title = titleInput?.value?.trim() || def.title;
-        instance.size = sizeSel?.value && WIDGET_SIZES.some((s) => s.value === sizeSel.value) ? sizeSel.value : def.defaultSize;
+        instance.size = nextSize;
         instance.config = newConfig;
+        if (sizeChanged) {
+          const dims = SIZE_GRID[nextSize] || SIZE_GRID[def.defaultSize] || { w: 4, h: 4 };
+          instance.w = dims.w;
+          instance.h = dims.h;
+        }
 
-        layout = { version: DASHBOARD_LAYOUT_VERSION, widgets: normalizeWidgets(layout.widgets) };
+        layout = {
+          version: DASHBOARD_LAYOUT_VERSION,
+          widgets: assignWidgetPositions(normalizeWidgets(layout.widgets), gridState.cols || GRID_MAX_COLS),
+        };
         saveLayout();
         renderWidgets();
         close();
@@ -977,13 +1186,22 @@ export async function viewDashboard() {
   const addWidget = (type) => {
     const def = WIDGET_DEFS[type];
     if (!def) return;
+    computeGridMetrics();
+    const dims = SIZE_GRID[def.defaultSize] || { w: 4, h: 4 };
     const instance = {
       id: newWidgetId(type),
       type,
       size: def.defaultSize,
       title: def.title,
       config: { ...def.defaultConfig },
+      x: 0,
+      y: 0,
+      w: dims.w,
+      h: dims.h,
     };
+    const spot = findNextSpot(instance, layout.widgets, gridState.cols || GRID_MAX_COLS);
+    instance.x = spot.x;
+    instance.y = spot.y;
     layout.widgets.push(instance);
     saveLayout();
     renderWidgets();
@@ -997,61 +1215,81 @@ export async function viewDashboard() {
     renderWidgets();
   };
 
-  const updateLayoutFromDOM = () => {
-    const order = Array.from(grid.querySelectorAll('.dash-widget'))
-      .map((el) => el.dataset.widgetId)
-      .filter(Boolean);
-    const index = new Map(order.map((id, idx) => [id, idx]));
-    layout.widgets.sort((a, b) => (index.get(a.id) ?? 999) - (index.get(b.id) ?? 999));
+  const startAction = (type, instance, element, event) => {
+    if (!editMode) return;
+    event.preventDefault();
+    event.stopPropagation();
+    computeGridMetrics();
+    activeAction = {
+      type,
+      instance,
+      element,
+      startX: event.clientX,
+      startY: event.clientY,
+      startGridX: instance.x || 0,
+      startGridY: instance.y || 0,
+      startW: instance.w || 1,
+      startH: instance.h || 1,
+    };
+    element.classList.add('dragging');
+    if (event.currentTarget?.setPointerCapture) {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+  };
+
+  const onPointerMove = (event) => {
+    if (!activeAction) return;
+    const { instance, element, type } = activeAction;
+    const dx = event.clientX - activeAction.startX;
+    const dy = event.clientY - activeAction.startY;
+    const stepX = gridState.colWidth + gridState.gap;
+    const stepY = gridState.rowHeight + gridState.gap;
+    const cols = gridState.cols || GRID_MAX_COLS;
+    const { minW, minH } = getConstraints(instance);
+
+    if (type === 'move') {
+      const nextX = clamp(activeAction.startGridX + Math.round(dx / stepX), 0, Math.max(0, cols - instance.w));
+      const nextY = Math.max(0, activeAction.startGridY + Math.round(dy / stepY));
+      instance.x = nextX;
+      instance.y = nextY;
+    } else if (type === 'resize') {
+      const nextW = clamp(activeAction.startW + Math.round(dx / stepX), minW, Math.max(minW, cols - instance.x));
+      const nextH = clamp(activeAction.startH + Math.round(dy / stepY), minH, 99);
+      instance.w = nextW;
+      instance.h = nextH;
+    }
+
+    positionWidgetElement(instance, element);
+    updateGridHeight();
+  };
+
+  const onPointerUp = () => {
+    if (!activeAction) return;
+    const { element } = activeAction;
+    element.classList.remove('dragging');
+    activeAction = null;
+    window.removeEventListener('pointermove', onPointerMove);
+    window.removeEventListener('pointerup', onPointerUp);
+    resolveOverlaps();
+    layoutGrid();
     saveLayout();
   };
 
-  const wireDragAndDrop = () => {
-    if (!grid) return;
-
-    grid.ondragover = (e) => {
-      if (!editMode) return;
-      e.preventDefault();
-      const dragging = grid.querySelector('.dash-widget.dragging');
-      if (!dragging) return;
-      const dropTarget = e.target.closest('.dash-widget');
-      if (!dropTarget || dropTarget === dragging) return;
-
-      const rect = dropTarget.getBoundingClientRect();
-      const before = e.clientY < rect.top + rect.height / 2;
-      if (before) grid.insertBefore(dragging, dropTarget);
-      else grid.insertBefore(dragging, dropTarget.nextSibling);
-    };
-
-    grid.ondrop = (e) => {
-      if (!editMode) return;
-      e.preventDefault();
-    };
-
-    grid.ondragend = (e) => {
-      if (!editMode) return;
-      const dragging = e.target.closest('.dash-widget');
-      if (dragging) dragging.classList.remove('dragging');
-      updateLayoutFromDOM();
-    };
-
-    grid.querySelectorAll('.dash-widget-handle').forEach((handle) => {
-      handle.ondragstart = (e) => {
-        if (!editMode) {
-          e.preventDefault();
-          return;
-        }
-        const widget = handle.closest('.dash-widget');
-        if (!widget) {
-          e.preventDefault();
-          return;
-        }
-        widget.classList.add('dragging');
-        if (e.dataTransfer) {
-          e.dataTransfer.effectAllowed = 'move';
-          e.dataTransfer.setData('text/plain', widget.dataset.widgetId || '');
-        }
-      };
+  const wireWidgetInteractions = () => {
+    grid.querySelectorAll('.dash-widget').forEach((widget) => {
+      const id = widget.dataset.widgetId;
+      const instance = layout.widgets.find((w) => w.id === id);
+      if (!instance) return;
+      const handle = widget.querySelector('.dash-widget-handle');
+      if (handle) {
+        handle.onpointerdown = (e) => startAction('move', instance, widget, e);
+      }
+      const resizer = widget.querySelector('.dash-widget-resize');
+      if (resizer) {
+        resizer.onpointerdown = (e) => startAction('resize', instance, widget, e);
+      }
     });
   };
 
@@ -1073,6 +1311,8 @@ export async function viewDashboard() {
       renderWidgets();
     };
   }
+
+  window.addEventListener('resize', () => layoutGrid());
 
   await renderWidgets();
   applyEditMode();

@@ -387,20 +387,19 @@ body.auth-logged-out .sidebar {
 .dashboard .dash-grid {
     flex: 1;
     min-height: 0;
-    display: grid;
-    gap: 12px;
-    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-    grid-auto-rows: minmax(180px, auto);
-    grid-auto-flow: dense;
-    align-items: stretch;
-    align-content: start;
+    position: relative;
     overflow: auto;
     padding-bottom: 12px;
+    background-size: calc(var(--grid-col-width, 140px) + var(--grid-gap, 12px)) calc(var(--grid-row-height, 80px) + var(--grid-gap, 12px));
+    background-image: linear-gradient(to right, rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
 }
 
 .dashboard .dash-widget {
-    min-height: var(--widget-min-height, 240px);
+    position: absolute;
     display: flex;
+    min-width: var(--grid-col-width, 140px);
+    min-height: var(--grid-row-height, 80px);
 }
 
 .dashboard.edit-mode .dash-widget {
@@ -417,20 +416,14 @@ body.auth-logged-out .sidebar {
 
 .dashboard .dash-widget.size-sm {
     --widget-min-height: 220px;
-    grid-column: span 1;
-    grid-row: span 1;
 }
 
 .dashboard .dash-widget.size-md {
     --widget-min-height: 300px;
-    grid-column: span 1;
-    grid-row: span 2;
 }
 
 .dashboard .dash-widget.size-lg {
     --widget-min-height: 420px;
-    grid-column: span 2;
-    grid-row: span 3;
 }
 
 .dashboard .dash-widget-card {
@@ -440,6 +433,7 @@ body.auth-logged-out .sidebar {
     flex-direction: column;
     flex: 1;
     min-height: 0;
+    position: relative;
 }
 
 .dashboard .dash-widget-head {
@@ -455,6 +449,14 @@ body.auth-logged-out .sidebar {
     color: var(--muted);
     letter-spacing: 1px;
     user-select: none;
+    cursor: grab;
+    padding: 2px 4px;
+    border: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.dashboard.edit-mode .dash-widget-handle:active {
+    cursor: grabbing;
 }
 
 .dashboard .dash-widget-title {
@@ -475,6 +477,24 @@ body.auth-logged-out .sidebar {
 
 .dashboard:not(.edit-mode) .dash-widget-actions {
     display: none;
+}
+
+.dashboard .dash-widget-resize {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    width: 14px;
+    height: 14px;
+    border-right: 2px solid var(--muted);
+    border-bottom: 2px solid var(--muted);
+    cursor: nwse-resize;
+    opacity: 0.8;
+}
+
+.dashboard:not(.edit-mode) .dash-widget-resize,
+.dashboard:not(.edit-mode) .dash-widget-handle {
+    opacity: 0;
+    pointer-events: none;
 }
 
 .dashboard .dash-widget-body {
@@ -1156,14 +1176,6 @@ button.danger {
 
     .split {
         grid-template-columns: 1fr;
-    }
-
-    .dashboard .dash-grid {
-        grid-template-columns: 1fr;
-    }
-
-    .dashboard .dash-widget.size-lg {
-        grid-column: span 1;
     }
 
     .grid.two,
