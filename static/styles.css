@@ -390,16 +390,15 @@ body.auth-logged-out .sidebar {
     position: relative;
     overflow: auto;
     padding-bottom: 12px;
-    background-size: calc(var(--grid-col-width, 140px) + var(--grid-gap, 12px)) calc(var(--grid-row-height, 80px) + var(--grid-gap, 12px));
-    background-image: linear-gradient(to right, rgba(255, 255, 255, 0.04) 1px, transparent 1px),
-        linear-gradient(to bottom, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
 }
+
 
 .dashboard .dash-widget {
     position: absolute;
     display: flex;
     min-width: var(--grid-col-width, 140px);
     min-height: var(--grid-row-height, 80px);
+    z-index: 1;
 }
 
 .dashboard.edit-mode .dash-widget {
@@ -428,7 +427,7 @@ body.auth-logged-out .sidebar {
 
 .dashboard .dash-widget-card {
     border: 1px solid var(--border);
-    background: rgba(0, 0, 0, 0.18);
+    background: var(--panel);
     display: flex;
     flex-direction: column;
     flex: 1;
@@ -503,6 +502,11 @@ body.auth-logged-out .sidebar {
     overflow: hidden;
     display: flex;
     flex-direction: column;
+}
+
+.dashboard .dash-widget-body .dash-upcoming {
+    flex: 1;
+    min-height: 0;
 }
 
 .dashboard .dash-split > .card {
@@ -699,11 +703,11 @@ body.auth-logged-out .sidebar {
 
 .dash-projection-chart {
     flex: 1;
-    min-height: 220px;
+    min-height: 0;
 }
 
-.dashboard .chart.chart--small {
-    height: clamp(220px, 46vh, 520px);
+.dashboard .dash-projection-chart .chart {
+    height: 100%;
 }
 
 /* Projection: horizontal filter bar + 2:1 chart/transactions split. */

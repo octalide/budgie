@@ -58,9 +58,10 @@ function createEmitter() {
 }
 
 const GRID_MIN_COL_WIDTH = 160;
-const GRID_ROW_RATIO = 0.65;
-const GRID_ROW_MIN = 84;
-const GRID_ROW_MAX = 160;
+const GRID_ROW_RATIO = 0.7;
+const GRID_ROW_MIN = 72;
+const GRID_ROW_MAX = 148;
+const GRID_HEIGHT_MIN = 480;
 const GRID_GAP = 12;
 const GRID_MIN_COLS = 4;
 const GRID_MAX_COLS = 12;
@@ -400,6 +401,9 @@ function createWidgetDefinitions() {
 
       return {
         update,
+        resize() {
+          // layout-only; nothing to recalc for size changes
+        },
         destroy() {
           unsub();
         },
@@ -505,6 +509,9 @@ function createWidgetDefinitions() {
 
       return {
         update,
+        resize() {
+          // layout-only; table and stats adapt via CSS
+        },
         destroy() {
           unsub();
         },
@@ -777,6 +784,12 @@ function createWidgetDefinitions() {
         syncSelection(cfg);
       };
 
+      const resize = () => {
+        if (!state.seriesData) return;
+        const cfg = { ...projection.defaultConfig, ...(instance.config || {}) };
+        redraw(cfg);
+      };
+
       const selectionUnsub = context.on('selection', (sel) => {
         if (!sel || sel.source === instance.id) return;
         if (!state.seriesData) return;
@@ -802,6 +815,7 @@ function createWidgetDefinitions() {
 
       return {
         update,
+        resize,
         destroy() {
           selectionUnsub();
           window.removeEventListener('resize', onResize);
@@ -934,6 +948,7 @@ export async function viewDashboard() {
   };
   let editMode = false;
   let activeAction = null;
+  let resizeRaf = null;
 
   const saveLayout = async () => {
     try {
@@ -961,7 +976,14 @@ export async function viewDashboard() {
     const cols = clamp(colsRaw, GRID_MIN_COLS, GRID_MAX_COLS);
     const colWidth = Math.max(80, Math.floor((width - GRID_GAP * (cols - 1)) / cols));
     const baseRow = Math.round(colWidth * GRID_ROW_RATIO);
-    const rowHeight = clamp(Math.round(baseRow / 4) * 4, GRID_ROW_MIN, GRID_ROW_MAX);
+    let rowHeight = clamp(Math.round(baseRow / 4) * 4, GRID_ROW_MIN, GRID_ROW_MAX);
+    const header = root?.querySelector('.dash-header');
+    const available = Math.max(GRID_HEIGHT_MIN, (root?.clientHeight || 0) - (header?.offsetHeight || 0) - GRID_GAP);
+    if (available > 0) {
+      const targetRows = clamp(Math.round(available / (rowHeight + GRID_GAP)), 6, 16);
+      const fitRow = Math.floor((available - GRID_GAP * (targetRows - 1)) / targetRows);
+      rowHeight = clamp(Math.round(fitRow / 4) * 4, GRID_ROW_MIN, GRID_ROW_MAX);
+    }
     gridState.cols = cols;
     gridState.colWidth = colWidth;
     gridState.rowHeight = rowHeight;
@@ -1024,6 +1046,19 @@ export async function viewDashboard() {
       positionWidgetElement(widget, el);
     }
     updateGridHeight();
+    scheduleResize();
+  };
+
+  const scheduleResize = (widgetId = null) => {
+    if (resizeRaf) cancelAnimationFrame(resizeRaf);
+    resizeRaf = requestAnimationFrame(() => {
+      resizeRaf = null;
+      if (widgetId) {
+        controllers.get(widgetId)?.resize?.();
+      } else {
+        for (const controller of controllers.values()) controller?.resize?.();
+      }
+    });
   };
 
   const destroyWidgets = () => {
@@ -1263,6 +1298,7 @@ export async function viewDashboard() {
 
     positionWidgetElement(instance, element);
     updateGridHeight();
+    scheduleResize(instance.id);
   };
 
   const onPointerUp = () => {
