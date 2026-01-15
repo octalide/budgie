@@ -119,28 +119,23 @@ export const cashflow = {
       const padB = 28;
       const nodeW = 8;
       const centerW = 10;
-      const rowH = 18;
-      const rowGap = 4;
+      const minRowH = 14;
+      const nodeGap = 4;
       const labelPad = 8;
 
       const nLeft = sources.length;
       const nRight = sinks.length;
-      const maxRows = Math.max(nLeft, nRight);
-      const stackH = maxRows * rowH + Math.max(0, maxRows - 1) * rowGap;
-      const maxCenterH = Math.min(stackH, Math.max(120, (height - padT - padB) * 0.5));
-      const availableH = Math.max(stackH, height - padT - padB);
+
+      const availableH = height - padT - padB;
+      const centerH = Math.max(100, availableH * 0.85);
 
       const leftX = padL;
       const rightX = Math.max(leftX + nodeW + 60, width - padR - nodeW);
       const centerX = Math.round((leftX + rightX) / 2 - centerW / 2);
 
-      const leftStackH = nLeft * rowH + Math.max(0, nLeft - 1) * rowGap;
-      const rightStackH = nRight * rowH + Math.max(0, nRight - 1) * rowGap;
-      const leftTop = padT + (availableH - leftStackH) / 2;
-      const rightTop = padT + (availableH - rightStackH) / 2;
-      const centerTop = padT + (availableH - maxCenterH) / 2;
-      const centerH = maxCenterH;
+      const centerTop = padT + (availableH - centerH) / 2;
 
+      // Calculate proportional heights for flows at center
       const leftHeights = sources.map((s) => {
         const frac = Number(s.amount ?? 0) / totalFlow;
         return Math.max(2, Math.round(frac * centerH));
@@ -150,6 +145,18 @@ export const cashflow = {
         return Math.max(2, Math.round(frac * centerH));
       });
 
+      // Calculate node heights - use flow height but ensure minimum for readability
+      const leftNodeHeights = leftHeights.map((h) => Math.max(minRowH, h));
+      const rightNodeHeights = rightHeights.map((h) => Math.max(minRowH, h));
+
+      // Calculate total stack heights including gaps
+      const leftStackH = leftNodeHeights.reduce((a, b) => a + b, 0) + Math.max(0, nLeft - 1) * nodeGap;
+      const rightStackH = rightNodeHeights.reduce((a, b) => a + b, 0) + Math.max(0, nRight - 1) * nodeGap;
+
+      // Center the stacks vertically
+      const leftTop = padT + (availableH - leftStackH) / 2;
+      const rightTop = padT + (availableH - rightStackH) / 2;
+
       const paths = [];
       const nodes = [];
       const texts = [];
@@ -158,7 +165,8 @@ export const cashflow = {
       let centerIn = centerTop;
       sources.forEach((item, idx) => {
         const flowH = leftHeights[idx];
-        const slotY = yLeft + rowH / 2;
+        const nodeH = leftNodeHeights[idx];
+        const slotY = yLeft + nodeH / 2;
         const centerY = centerIn + flowH / 2;
         const name = item.name || '';
         const label = truncateText(name, LABEL_MAX);
@@ -176,7 +184,7 @@ export const cashflow = {
           `<path d="M ${x0} ${slotY} C ${c0} ${slotY}, ${c1} ${centerY}, ${x1} ${centerY}" stroke="${flowColor}" stroke-width="${strokeW}" fill="none" />`
         );
         nodes.push(
-          `<rect x="${leftX}" y="${yLeft}" width="${nodeW}" height="${rowH}" rx="1" fill="${nodeColor}" />`
+          `<rect x="${leftX}" y="${yLeft}" width="${nodeW}" height="${nodeH}" rx="1" fill="${nodeColor}" />`
         );
 
         const labelX = leftX - labelPad;
@@ -189,7 +197,7 @@ export const cashflow = {
           </text>`
         );
 
-        yLeft += rowH + rowGap;
+        yLeft += nodeH + nodeGap;
         centerIn += flowH;
       });
 
@@ -197,7 +205,8 @@ export const cashflow = {
       let centerOut = centerTop;
       sinks.forEach((item, idx) => {
         const flowH = rightHeights[idx];
-        const slotY = yRight + rowH / 2;
+        const nodeH = rightNodeHeights[idx];
+        const slotY = yRight + nodeH / 2;
         const centerY = centerOut + flowH / 2;
         const name = item.name || '';
         const label = truncateText(name, LABEL_MAX);
@@ -215,7 +224,7 @@ export const cashflow = {
           `<path d="M ${x0} ${centerY} C ${c0} ${centerY}, ${c1} ${slotY}, ${x1} ${slotY}" stroke="${flowColor}" stroke-width="${strokeW}" fill="none" />`
         );
         nodes.push(
-          `<rect x="${rightX}" y="${yRight}" width="${nodeW}" height="${rowH}" rx="1" fill="${nodeColor}" />`
+          `<rect x="${rightX}" y="${yRight}" width="${nodeW}" height="${nodeH}" rx="1" fill="${nodeColor}" />`
         );
 
         const labelX = rightX + nodeW + labelPad;
@@ -228,7 +237,7 @@ export const cashflow = {
           </text>`
         );
 
-        yRight += rowH + rowGap;
+        yRight += nodeH + nodeGap;
         centerOut += flowH;
       });
 
