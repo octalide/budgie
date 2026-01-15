@@ -3,15 +3,14 @@ import { fmtDollarsAccountingFromCents } from '../../../js/money.js';
 import { drawLineChart, distinctSeriesPalette, stableSeriesColor } from '../../../js/chart.js';
 import { addMonthsISO, clamp, asInt } from '../utils.js';
 
-export const projection = {
-  type: 'projection',
-  title: 'Projection',
-  description: 'Projected balances and selectable lines.',
+export const actuals = {
+  type: 'actuals',
+  title: 'Actuals',
+  description: 'Actual balances and selectable lines.',
   defaultSize: 'lg',
   minW: 3,
   minH: 3,
   defaultConfig: {
-    includeInterest: true,
     stepDays: 7,
     monthsAhead: 6,
     showLiabilities: false,
@@ -20,7 +19,6 @@ export const projection = {
   },
   settings: [
     { key: 'accountId', label: 'Account', type: 'account' },
-    { key: 'includeInterest', label: 'Include interest', type: 'checkbox' },
     { key: 'stepDays', label: 'Granularity (days)', type: 'number', min: 1, max: 366, step: 1 },
     { key: 'monthsAhead', label: 'Months ahead', type: 'number', min: 1, max: 24, step: 1 },
     { key: 'showHidden', label: 'Show hidden accounts', type: 'checkbox' },
@@ -35,7 +33,7 @@ export const projection = {
             <div class="chart-lines"></div>
           </div>
           <div class="dash-projection-chart">
-            <label>Projection</label>
+            <label>Actuals</label>
             <canvas class="chart chart--small"></canvas>
           </div>
         </div>
@@ -290,7 +288,7 @@ export const projection = {
           if (!next) state.selected.delete('net');
           if (context.updateWidgetConfig) context.updateWidgetConfig(instance.id, { showLiabilities: next });
           else instance.config = { ...(instance.config || {}), showLiabilities: next };
-          const nextCfg = { ...projection.defaultConfig, ...(instance.config || {}), showLiabilities: next };
+          const nextCfg = { ...actuals.defaultConfig, ...(instance.config || {}), showLiabilities: next };
           renderLines(nextCfg);
           redraw(nextCfg);
         };
@@ -313,23 +311,22 @@ export const projection = {
       const idx = locked ? clamp(Number(state.lockedIdx || 0), 0, dates.length - 1) : 0;
       const date = dates[idx] || context.asOf;
       if (context.selection.source && context.selection.source !== instance.id && context.selection.locked) return;
-      context.setSelection({ locked, idx, date, source: instance.id, mode: 'projected' });
+      context.setSelection({ locked, idx, date, source: instance.id, mode: 'actual' });
     };
 
     const update = async () => {
-      const cfg = { ...projection.defaultConfig, ...(instance.config || {}) };
+      const cfg = { ...actuals.defaultConfig, ...(instance.config || {}) };
       const stepDays = clamp(asInt(cfg.stepDays, 7), 1, 366);
       const fromDate = context.range?.from || context.asOf;
       const toDate = context.range?.to || addMonthsISO(fromDate, clamp(asInt(cfg.monthsAhead, 6), 1, 24));
-      const key = `projected|${fromDate}|${toDate}|${stepDays}|${cfg.includeInterest ? '1' : '0'}`;
+      const key = `actual|${fromDate}|${toDate}|${stepDays}`;
       if (key !== state.seriesKey) {
         state.seriesKey = key;
         state.seriesData = await context.getSeries({
           fromDate,
           toDate,
           stepDays,
-          includeInterest: Boolean(cfg.includeInterest),
-          mode: 'projected',
+          mode: 'actual',
         });
         state.selected.clear();
         state.selected.add('gross');
@@ -346,7 +343,7 @@ export const projection = {
 
     const resize = () => {
       if (!state.seriesData) return;
-      const cfg = { ...projection.defaultConfig, ...(instance.config || {}) };
+      const cfg = { ...actuals.defaultConfig, ...(instance.config || {}) };
       redraw(cfg);
     };
 
@@ -359,7 +356,7 @@ export const projection = {
       } else {
         state.lockedIdx = null;
       }
-      const cfg = { ...projection.defaultConfig, ...(instance.config || {}) };
+      const cfg = { ...actuals.defaultConfig, ...(instance.config || {}) };
       updateSelectionLabel();
       renderLines(cfg);
       redraw(cfg);
@@ -368,7 +365,7 @@ export const projection = {
     const rangeUnsub = context.on('range', () => update());
 
     const onResize = () => {
-      const cfg = { ...projection.defaultConfig, ...(instance.config || {}) };
+      const cfg = { ...actuals.defaultConfig, ...(instance.config || {}) };
       redraw(cfg);
     };
     window.addEventListener('resize', onResize);

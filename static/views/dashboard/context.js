@@ -17,7 +17,7 @@ export function createDashboardContext(asOf, accounts = [], range = null) {
   const context = {
     asOf,
     range: dateRange,
-    selection: { locked: false, date: asOf, idx: 0, source: null },
+    selection: { locked: false, date: asOf, idx: 0, source: null, mode: 'projected' },
     on: emitter.on,
     emit: emitter.emit,
     setSelection(next) {
@@ -52,16 +52,18 @@ export function createDashboardContext(asOf, accounts = [], range = null) {
       }
       return data;
     },
-    async getSeries({ fromDate, toDate, stepDays, includeInterest }) {
-      const key = `${fromDate}|${toDate}|${stepDays}|${includeInterest ? '1' : '0'}`;
+    async getSeries({ fromDate, toDate, stepDays, includeInterest, mode }) {
+      const seriesMode = mode || 'projected';
+      const include = seriesMode === 'projected' && Boolean(includeInterest);
+      const key = `${seriesMode}|${fromDate}|${toDate}|${stepDays}|${include ? '1' : '0'}`;
       if (seriesCache.has(key)) return seriesCache.get(key);
       const qs = new URLSearchParams({
-        mode: 'projected',
+        mode: seriesMode,
         from_date: fromDate,
         to_date: toDate,
         step_days: String(stepDays),
       });
-      if (includeInterest) qs.set('include_interest', '1');
+      if (include) qs.set('include_interest', '1');
       const res = await api(`/api/balances/series?${qs.toString()}`);
       const data = res.data || null;
       seriesCache.set(key, data);
