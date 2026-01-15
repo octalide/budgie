@@ -379,9 +379,42 @@ body.auth-logged-out .sidebar {
     flex-wrap: wrap;
 }
 
+.dash-range {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px;
+    border: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.dash-range input {
+    width: 120px;
+    padding: 6px 8px;
+    font-size: 12px;
+}
+
+.dash-range button {
+    padding: 6px 8px;
+    font-size: 12px;
+}
+
+.dash-range span {
+    color: var(--muted);
+    font-size: 12px;
+}
+
 .dash-actions button {
     padding: 6px 10px;
     font-size: 12px;
+}
+
+.dashboard:not(.edit-mode) #dash_reset {
+    display: none;
+}
+
+.dashboard:not(.edit-mode) #dash_add {
+    display: none;
 }
 
 .dashboard .dash-grid {
@@ -556,11 +589,24 @@ body.auth-logged-out .sidebar {
     min-height: 0;
 }
 
+.dash-txns {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    gap: 8px;
+}
+
 .dash-entries .table-wrap,
 .dash-txns-table .table-wrap {
     flex: 1;
     min-height: 0;
     max-height: none;
+    overflow: auto;
+}
+
+.dash-txns-table .table {
+    min-width: 640px;
 }
 
 .dash-txns-sub {
@@ -692,7 +738,7 @@ body.auth-logged-out .sidebar {
 
 .dash-upcoming-row {
     display: grid;
-    grid-template-columns: 90px 1fr 1fr 110px;
+    grid-template-columns: 90px 1fr 1fr 110px 70px;
     gap: 10px;
     align-items: center;
     font-size: 12px;
@@ -713,6 +759,12 @@ body.auth-logged-out .sidebar {
 .dash-upcoming-amt {
     text-align: right;
     color: var(--text);
+}
+
+.dash-upcoming-kind {
+    text-align: right;
+    color: var(--muted);
+    font-size: 11px;
 }
 
 .dash-upcoming-more {
@@ -761,6 +813,14 @@ body.auth-logged-out .sidebar {
     flex: 1;
 }
 
+.dash-expenses {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 0;
+    flex: 1;
+}
+
 .dash-projection-chart {
     flex: 1;
     min-height: 0;
@@ -770,10 +830,15 @@ body.auth-logged-out .sidebar {
     padding-bottom: 6px;
 }
 
+.dash-projection-chart label {
+    flex: 0 0 auto;
+}
+
 .dashboard .dash-projection-chart .chart {
     flex: 1;
     min-height: 0;
-    height: auto;
+    height: 100%;
+    width: 100%;
 }
 
 /* Projection: horizontal filter bar + 2:1 chart/transactions split. */

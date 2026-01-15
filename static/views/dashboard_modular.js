@@ -16,6 +16,16 @@ function addMonthsISO(isoDate, months) {
   return `${y}-${m}-${day}`;
 }
 
+function addYearsISO(isoDate, years) {
+  const d = new Date(`${isoDate}T00:00:00`);
+  if (!Number.isFinite(d.getTime())) return isoDate;
+  d.setFullYear(d.getFullYear() + Number(years || 0));
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 function addDaysISO(isoDate, days) {
   const d = new Date(`${isoDate}T00:00:00`);
   if (!Number.isFinite(d.getTime())) return isoDate;
@@ -268,7 +278,7 @@ function createDefaultLayout() {
   };
 }
 
-function createDashboardContext(asOf, accounts = []) {
+function createDashboardContext(asOf, accounts = [], range = null) {
   const emitter = createEmitter();
   const balancesCache = new Map();
   const seriesCache = new Map();
@@ -276,15 +286,33 @@ function createDashboardContext(asOf, accounts = []) {
   const entriesCache = new Map();
   let accountMeta = new Map();
   const accountById = new Map((accounts || []).map((a) => [Number(a.id), a]));
+  const dateRange = {
+    from: range?.from || asOf,
+    to: range?.to || addYearsISO(range?.from || asOf, 1),
+  };
 
   const context = {
     asOf,
+    range: dateRange,
     selection: { locked: false, date: asOf, idx: 0, source: null },
     on: emitter.on,
     emit: emitter.emit,
     setSelection(next) {
       context.selection = { ...context.selection, ...next };
       emitter.emit('selection', context.selection);
+    },
+    setRange(next) {
+      const from = next?.from || dateRange.from;
+      const to = next?.to || dateRange.to;
+      dateRange.from = from;
+      dateRange.to = to;
+      context.asOf = from;
+      balancesCache.clear();
+      seriesCache.clear();
+      occurrencesCache.clear();
+      entriesCache.clear();
+      accountMeta = new Map();
+      emitter.emit('range', { from, to });
     },
     async getBalances(date, opts = {}) {
       const mode = opts?.mode || 'actual';
@@ -567,6 +595,143 @@ function createWidgetDefinitions() {
         },
         destroy() {
           unsub();
+        },
+      };
+    },
+  };
+
+  const recentExpenses = {
+    type: 'recent_expenses',
+    title: 'Recent expenses',
+    description: 'Recent expenses including manual entries.',
+    defaultSize: 'md',
+    minW: 2,
+    minH: 2,
+    defaultConfig: {
+      days: 7,
+      syncSelection: true,
+      showHidden: false,
+      accountId: '',
+    },
+    settings: [
+      { key: 'accountId', label: 'Account', type: 'account' },
+      { key: 'days', label: 'Window (days)', type: 'number', min: 1, max: 365, step: 1 },
+      { key: 'syncSelection', label: 'Sync to selection', type: 'checkbox' },
+      { key: 'showHidden', label: 'Show hidden accounts', type: 'checkbox' },
+    ],
+    mount({ root, context, instance }) {
+      const body = root.querySelector('.dash-widget-body');
+      body.innerHTML = `<div class="dash-upcoming"></div>`;
+      const box = body.querySelector('.dash-upcoming');
+
+      const update = async () => {
+        const cfg = { ...recentExpenses.defaultConfig, ...(instance.config || {}) };
+        const days = clamp(asInt(cfg.days, 7), 1, 365);
+        const accountId = cfg.accountId ? Number(cfg.accountId) : null;
+        const baseDate = cfg.syncSelection && context.selection?.locked ? context.selection.date : context.asOf;
+        const fromDate = addDaysISO(baseDate, -days);
+
+        const occ = await context.getOccurrences(fromDate, baseDate);
+        const entries = await context.getEntries();
+        const meta = await context.getAccountMeta();
+        const accountLookup = context.accountById;
+
+        const acctName = (id) => {
+          if (id === null || id === undefined || id === '') return '';
+          const n = Number(id);
+          if (!Number.isFinite(n)) return '';
+          return meta.get(n)?.name || accountLookup.get(n)?.name || String(id);
+        };
+        const isHidden = (id) => {
+          if (id === null || id === undefined || id === '') return false;
+          const n = Number(id);
+          if (!Number.isFinite(n)) return false;
+          return Number(meta.get(n)?.exclude_from_dashboard ?? accountLookup.get(n)?.exclude_from_dashboard ?? 0) === 1;
+        };
+
+        const occRows = (occ || [])
+          .filter((o) => String(o?.kind || '') === 'E')
+          .filter((o) => (!accountId ? true : Number(o?.src_account_id) === accountId))
+          .filter((o) => (cfg.showHidden ? true : !isHidden(o?.src_account_id)))
+          .map((o) => ({
+            date: String(o.occ_date || ''),
+            name: String(o.name || ''),
+            accountId: o.src_account_id,
+            amount: Number(o.amount_cents ?? 0),
+            source: 'Scheduled',
+          }));
+
+        const entryRows = (entries || [])
+          .filter((e) => {
+            const d = String(e.entry_date || '');
+            if (!d) return false;
+            if (d < fromDate || d > baseDate) return false;
+            if (accountId) return Number(e?.src_account_id) === accountId;
+            return true;
+          })
+          .filter((e) => e?.src_account_id != null && (e?.dest_account_id == null || e?.dest_account_id === ''))
+          .filter((e) => (cfg.showHidden ? true : !isHidden(e?.src_account_id)))
+          .map((e) => ({
+            date: String(e.entry_date || ''),
+            name: String(e.name || ''),
+            accountId: e.src_account_id,
+            amount: Number(e.amount_cents ?? 0),
+            source: 'Entry',
+          }));
+
+        const merged = occRows.concat(entryRows).sort((a, b) => {
+          if (a.date > b.date) return -1;
+          if (a.date < b.date) return 1;
+          return a.name.localeCompare(b.name);
+        });
+
+        const total = merged.reduce((acc, o) => acc + Number(o.amount ?? 0), 0);
+
+        const rows = merged
+          .map((o) => {
+            const date = escapeHtml(String(o.date || ''));
+            const name = escapeHtml(String(o.name || ''));
+            const account = escapeHtml(acctName(o.accountId));
+            const amt = fmtDollarsAccountingFromCents(Number(o.amount ?? 0));
+            const source = escapeHtml(o.source || '');
+            return `
+              <div class="dash-upcoming-row">
+                <div class="dash-upcoming-date mono">${date}</div>
+                <div class="dash-upcoming-name" title="${name}">${name}</div>
+                <div class="dash-upcoming-acct" title="${account}">${account}</div>
+                <div class="dash-upcoming-amt mono">${escapeHtml(amt)}</div>
+                <div class="dash-upcoming-kind">${source}</div>
+              </div>
+            `;
+          })
+          .join('');
+
+        const title = `Recent expenses (${days}d)`;
+        const subtitle = `${fromDate} → ${baseDate}`;
+        const totalLine = `Total: <span class="mono">${escapeHtml(fmtDollarsAccountingFromCents(total))}</span>`;
+
+        box.innerHTML = `
+          <div class="dash-upcoming-head">
+            <div>
+              <div class="dash-upcoming-title">${title}</div>
+              <div class="dash-upcoming-sub">${escapeHtml(subtitle)}</div>
+            </div>
+            <div class="dash-upcoming-total">${totalLine}</div>
+          </div>
+          ${merged.length ? `<div class="dash-upcoming-list">${rows}</div>` : `<div class="notice">No expenses in the last ${days} days.</div>`}
+        `;
+      };
+
+      const unsubSel = context.on('selection', () => update());
+      const unsubRange = context.on('range', () => update());
+      update();
+
+      return {
+        update,
+        resize() {},
+        destroy() {
+          unsubSel();
+          unsubRange();
         },
       };
     },
@@ -885,8 +1050,8 @@ function createWidgetDefinitions() {
       };
 
       const fetchAndCompute = async (cfg) => {
-        const fromDate = context.asOf;
-        const toDate = addMonthsISO(fromDate, clamp(asInt(cfg.monthsAhead, 6), 1, 24));
+        const fromDate = context.range?.from || context.asOf;
+        const toDate = context.range?.to || addMonthsISO(fromDate, clamp(asInt(cfg.monthsAhead, 6), 1, 24));
         state.axis = buildDateAxis(fromDate, toDate, clamp(asInt(cfg.stepDays, 7), 1, 366));
         if (!state.axis.dates.length) {
           state.groups = [];
@@ -1394,9 +1559,8 @@ function createWidgetDefinitions() {
       const update = async () => {
         const cfg = { ...projection.defaultConfig, ...(instance.config || {}) };
         const stepDays = clamp(asInt(cfg.stepDays, 7), 1, 366);
-        const monthsAhead = clamp(asInt(cfg.monthsAhead, 6), 1, 24);
-        const fromDate = context.asOf;
-        const toDate = addMonthsISO(fromDate, monthsAhead);
+        const fromDate = context.range?.from || context.asOf;
+        const toDate = context.range?.to || addMonthsISO(fromDate, clamp(asInt(cfg.monthsAhead, 6), 1, 24));
         const key = `${fromDate}|${toDate}|${stepDays}|${cfg.includeInterest ? '1' : '0'}`;
         if (key !== state.seriesKey) {
           state.seriesKey = key;
@@ -1440,6 +1604,8 @@ function createWidgetDefinitions() {
         redraw(cfg);
       });
 
+      const rangeUnsub = context.on('range', () => update());
+
       const onResize = () => {
         const cfg = { ...projection.defaultConfig, ...(instance.config || {}) };
         redraw(cfg);
@@ -1457,9 +1623,11 @@ function createWidgetDefinitions() {
         },
       };
     },
+          rangeUnsub();
   };
 
-  return { upcoming, snapshot, balanceCard, recentEntries, projectionTxns, expensesChart, projection };
+  const defs = [upcoming, recentExpenses, snapshot, balanceCard, recentEntries, projectionTxns, expensesChart, projection];
+  return Object.fromEntries(defs.map((def) => [def.type, def]));
 }
 
 function widgetSettingsForm(def, instance, accounts = []) {
@@ -1540,10 +1708,11 @@ export async function viewDashboard() {
   activeNav('dashboard');
 
   const asOf = isoToday();
-  const toDate = addMonthsISO(asOf, 6);
+  const rangeFrom = asOf;
+  const rangeTo = addYearsISO(asOf, 1);
   const accountsRes = await api('/api/accounts');
   const accounts = accountsRes.data || [];
-  const context = createDashboardContext(asOf, accounts);
+  const context = createDashboardContext(asOf, accounts, { from: rangeFrom, to: rangeTo });
 
   let layout = createDefaultLayout();
   try {
@@ -1558,9 +1727,15 @@ export async function viewDashboard() {
       <div class="dash-header">
         <div>
           <div class="dash-title">Dashboard</div>
-          <div class="dash-subtitle">as-of ${escapeHtml(asOf)} • lookahead to ${escapeHtml(toDate)}</div>
+          <div class="dash-subtitle">as-of ${escapeHtml(rangeFrom)} • lookahead to ${escapeHtml(rangeTo)}</div>
         </div>
         <div class="dash-actions">
+          <div class="dash-range">
+            <input id="dash_from" value="${escapeHtml(rangeFrom)}" />
+            <span>→</span>
+            <input id="dash_to" value="${escapeHtml(rangeTo)}" />
+            <button id="dash_apply" type="button">Apply</button>
+          </div>
           <button id="dash_add" type="button">Add widget</button>
           <button id="dash_edit" type="button">Edit layout</button>
           <button id="dash_reset" type="button">Reset</button>
@@ -1956,6 +2131,26 @@ export async function viewDashboard() {
   const addBtn = $('#dash_add');
   const editBtn = $('#dash_edit');
   const resetBtn = $('#dash_reset');
+  const fromInput = $('#dash_from');
+  const toInput = $('#dash_to');
+  const applyBtn = $('#dash_apply');
+
+  const applyRange = () => {
+    const from = fromInput?.value?.trim() || context.range.from;
+    const to = toInput?.value?.trim() || context.range.to;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) return;
+    const nextFrom = from <= to ? from : to;
+    const nextTo = from <= to ? to : from;
+    context.setRange({ from: nextFrom, to: nextTo });
+    if (fromInput) fromInput.value = nextFrom;
+    if (toInput) toInput.value = nextTo;
+
+    if (context.selection.locked && (context.selection.date < nextFrom || context.selection.date > nextTo)) {
+      context.setSelection({ locked: false, idx: 0, date: nextFrom, source: null });
+    }
+
+    for (const controller of controllers.values()) controller?.update?.();
+  };
 
   if (addBtn) addBtn.onclick = () => openAddWidgetModal();
   if (editBtn) {
@@ -1971,6 +2166,7 @@ export async function viewDashboard() {
       renderWidgets();
     };
   }
+  if (applyBtn) applyBtn.onclick = () => applyRange();
 
   window.addEventListener('resize', () => layoutGrid());
 
