@@ -722,12 +722,12 @@ func (s *server) activeAccountMeta() (map[int64]accountMeta, error) {
 	return out, rows.Err()
 }
 
-func interestForPeriodCents(balanceCents int64, aprBps int64, compound string, days int) int64 {
+func interestForPeriod(balanceCents int64, aprBps int64, compound string, days int) float64 {
 	if days <= 0 || aprBps <= 0 {
 		return 0
 	}
 	// APR in bps (e.g., 1899 = 18.99%). Convert to decimal annual rate.
-	annual := (float64(aprBps) / 10000.0) / 100.0
+	annual := float64(aprBps) / 10000.0
 
 	var factor float64
 	switch compound {
@@ -741,7 +741,11 @@ func interestForPeriodCents(balanceCents int64, aprBps int64, compound string, d
 		factor = math.Pow(1.0+daily, float64(days)) - 1.0
 	}
 	// Sign-aware: negative balances produce negative interest deltas (debt grows).
-	return int64(math.Round(float64(balanceCents) * factor))
+	return float64(balanceCents) * factor
+}
+
+func interestForPeriodCents(balanceCents int64, aprBps int64, compound string, days int) int64 {
+	return int64(math.Round(interestForPeriod(balanceCents, aprBps, compound, days)))
 }
 
 func (s *server) actualBalancesAsOf(asOf string) ([]balancePoint, error) {
@@ -934,6 +938,7 @@ func (s *server) balancesSeries(w http.ResponseWriter, r *http.Request) {
 
 	basePrev := make(map[int64]int64)
 	adjPrev := make(map[int64]int64)
+	interestCarry := make(map[int64]float64)
 
 	for cur := fromT; !cur.After(toT); cur = cur.AddDate(0, 0, stepDays) {
 		asOf := cur.Format("2006-01-02")
@@ -994,7 +999,11 @@ func (s *server) balancesSeries(w http.ResponseWriter, r *http.Request) {
 				delta := p.BalanceCents - bp
 				ap := adjPrev[p.ID]
 				if m.IsInterestBearing == 1 && m.InterestAprBps > 0 {
-					val = ap + delta + interestForPeriodCents(ap, m.InterestAprBps, m.InterestCompound, stepDays)
+					interest := interestForPeriod(ap, m.InterestAprBps, m.InterestCompound, stepDays)
+					carry := interestCarry[p.ID] + interest
+					interestCents := int64(math.Trunc(carry))
+					interestCarry[p.ID] = carry - float64(interestCents)
+					val = ap + delta + interestCents
 				} else {
 					val = ap + delta
 				}
