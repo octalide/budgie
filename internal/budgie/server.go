@@ -242,6 +242,10 @@ func (s *server) schedules(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, e)
 			return
 		}
+		isActive := int64(1)
+		if payload.IsActive != nil {
+			isActive = *payload.IsActive
+		}
 		res, err := s.db.Exec(
 			`INSERT INTO schedule (
 			 name, kind, amount_cents, src_account_id, dest_account_id,
@@ -250,7 +254,7 @@ func (s *server) schedules(w http.ResponseWriter, r *http.Request) {
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			payload.Name, payload.Kind, payload.AmountCents, payload.SrcAccountID, payload.DestAccountID,
 			payload.StartDate, payload.EndDate, payload.Freq, payload.Interval, payload.ByMonthDay, payload.ByWeekday,
-			payload.Description, payload.IsActive,
+			payload.Description, isActive,
 		)
 		if err != nil {
 			writeErr(w, badRequest("could not create schedule", map[string]any{"sqlite": err.Error()}))
@@ -282,6 +286,10 @@ func (s *server) scheduleByID(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, e)
 			return
 		}
+		isActive := int64(1)
+		if payload.IsActive != nil {
+			isActive = *payload.IsActive
+		}
 		_, err := s.db.Exec(
 			`UPDATE schedule
 			SET name=?, kind=?, amount_cents=?, src_account_id=?, dest_account_id=?,
@@ -290,7 +298,7 @@ func (s *server) scheduleByID(w http.ResponseWriter, r *http.Request) {
 			WHERE id=?`,
 			payload.Name, payload.Kind, payload.AmountCents, payload.SrcAccountID, payload.DestAccountID,
 			payload.StartDate, payload.EndDate, payload.Freq, payload.Interval, payload.ByMonthDay, payload.ByWeekday,
-			payload.Description, payload.IsActive, id,
+			payload.Description, isActive, id,
 		)
 		if err != nil {
 			writeErr(w, badRequest("could not update schedule", map[string]any{"sqlite": err.Error()}))
@@ -1030,7 +1038,7 @@ type schedulePayload struct {
 	ByMonthDay    *int64  `json:"bymonthday"`
 	ByWeekday     *int64  `json:"byweekday"`
 	Description   *string `json:"description"`
-	IsActive      int64   `json:"is_active"`
+	IsActive      *int64  `json:"is_active"`
 }
 
 func parseSchedulePayload(r *http.Request) (*schedulePayload, *apiErr) {
@@ -1072,8 +1080,15 @@ func parseSchedulePayload(r *http.Request) (*schedulePayload, *apiErr) {
 			return nil, badRequest("byweekday must be 0..6", nil)
 		}
 	}
-	if p.IsActive != 0 {
-		p.IsActive = 1
+	if p.IsActive == nil {
+		v := int64(1)
+		p.IsActive = &v
+	} else if *p.IsActive != 0 {
+		v := int64(1)
+		p.IsActive = &v
+	} else {
+		v := int64(0)
+		p.IsActive = &v
 	}
 
 	src := p.SrcAccountID
