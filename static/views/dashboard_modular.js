@@ -72,12 +72,6 @@ const SIZE_GRID = {
   lg: { w: 6, h: 6 },
 };
 
-const WIDGET_SIZES = [
-  { value: 'sm', label: 'Small' },
-  { value: 'md', label: 'Medium' },
-  { value: 'lg', label: 'Large' },
-];
-
 const DASHBOARD_LAYOUT_VERSION = 3;
 
 const WIDGET_DEFS = createWidgetDefinitions();
@@ -123,7 +117,7 @@ function normalizeWidgetInstance(raw) {
   const def = WIDGET_DEFS[type];
   if (!def) return null;
   const id = raw.id ? String(raw.id) : newWidgetId(type);
-  const size = WIDGET_SIZES.some((s) => s.value === raw.size) ? raw.size : def.defaultSize;
+  const size = typeof raw.size === 'string' && raw.size ? raw.size : def.defaultSize;
   const title = typeof raw.title === 'string' && raw.title.trim() ? raw.title.trim() : def.title;
   const dims = SIZE_GRID[size] || SIZE_GRID[def.defaultSize] || { w: 4, h: 4 };
   const minW = def.minW || 2;
@@ -776,6 +770,8 @@ function createWidgetDefinitions() {
           });
           state.selected.clear();
           state.selected.add('total');
+          const accounts = filteredAccounts(cfg);
+          for (const a of accounts) state.selected.add(String(a.id));
         }
 
         updateSelectionLabel();
@@ -829,60 +825,61 @@ function createWidgetDefinitions() {
 
 function widgetSettingsForm(def, instance, accounts = []) {
   const config = { ...def.defaultConfig, ...(instance.config || {}) };
-  const sizeValue = WIDGET_SIZES.some((s) => s.value === instance.size) ? instance.size : def.defaultSize;
-  const fields = def.settings
+  const checkboxFields = def.settings.filter((field) => field.type === 'checkbox');
+  const otherFields = def.settings.filter((field) => field.type !== 'checkbox');
+
+  const renderField = (field) => {
+    const id = `ws_${field.key}`;
+    if (field.type === 'number') {
+      return `
+        <div>
+          <label>${field.label}</label>
+          <input id="${id}" type="number" value="${escapeHtml(String(config[field.key] ?? ''))}" min="${field.min ?? ''}" max="${field.max ?? ''}" step="${field.step ?? 1}" />
+        </div>
+      `;
+    }
+    if (field.type === 'select') {
+      const options = (field.options || [])
+        .map((opt) => `<option value="${escapeHtml(String(opt.value))}" ${String(config[field.key]) === String(opt.value) ? 'selected' : ''}>${escapeHtml(String(opt.label))}</option>`)
+        .join('');
+      return `
+        <div>
+          <label>${field.label}</label>
+          <select id="${id}">${options}</select>
+        </div>
+      `;
+    }
+    if (field.type === 'account') {
+      const opts = ['<option value="">Any account</option>']
+        .concat(
+          (accounts || []).map(
+            (a) =>
+              `<option value="${escapeHtml(String(a.id))}" ${String(config[field.key]) === String(a.id) ? 'selected' : ''}>${escapeHtml(a.name || String(a.id))}</option>`
+          )
+        )
+        .join('');
+      return `
+        <div>
+          <label>${field.label}</label>
+          <select id="${id}">${opts}</select>
+        </div>
+      `;
+    }
+    return '';
+  };
+
+  const fields = otherFields.map((field) => renderField(field)).join('');
+  const checks = checkboxFields
     .map((field) => {
       const id = `ws_${field.key}`;
-      if (field.type === 'checkbox') {
-        return `
-          <div>
-            <label class="chart-line" style="gap: 10px;">
-              <input type="checkbox" id="${id}" ${config[field.key] ? 'checked' : ''} />
-              <span>${field.label}</span>
-            </label>
-          </div>
-        `;
-      }
-      if (field.type === 'number') {
-        return `
-          <div>
-            <label>${field.label}</label>
-            <input id="${id}" type="number" value="${escapeHtml(String(config[field.key] ?? ''))}" min="${field.min ?? ''}" max="${field.max ?? ''}" step="${field.step ?? 1}" />
-          </div>
-        `;
-      }
-      if (field.type === 'select') {
-        const options = (field.options || [])
-          .map((opt) => `<option value="${escapeHtml(String(opt.value))}" ${String(config[field.key]) === String(opt.value) ? 'selected' : ''}>${escapeHtml(String(opt.label))}</option>`)
-          .join('');
-        return `
-          <div>
-            <label>${field.label}</label>
-            <select id="${id}">${options}</select>
-          </div>
-        `;
-      }
-      if (field.type === 'account') {
-        const opts = ['<option value="">Any account</option>']
-          .concat(
-            (accounts || []).map(
-              (a) =>
-                `<option value="${escapeHtml(String(a.id))}" ${String(config[field.key]) === String(a.id) ? 'selected' : ''}>${escapeHtml(a.name || String(a.id))}</option>`
-            )
-          )
-          .join('');
-        return `
-          <div>
-            <label>${field.label}</label>
-            <select id="${id}">${opts}</select>
-          </div>
-        `;
-      }
-      return '';
+      return `
+        <label class="dash-settings-check">
+          <input type="checkbox" id="${id}" ${config[field.key] ? 'checked' : ''} />
+          <span>${field.label}</span>
+        </label>
+      `;
     })
     .join('');
-
-  const sizeOpts = WIDGET_SIZES.map((opt) => `<option value="${opt.value}" ${opt.value === sizeValue ? 'selected' : ''}>${opt.label}</option>`).join('');
 
   return `
     <div class="grid two">
@@ -890,12 +887,9 @@ function widgetSettingsForm(def, instance, accounts = []) {
         <label>Title</label>
         <input id="ws_title" value="${escapeHtml(instance.title || '')}" placeholder="${escapeHtml(def.title)}" />
       </div>
-      <div>
-        <label>Size</label>
-        <select id="ws_size">${sizeOpts}</select>
-      </div>
       ${fields}
     </div>
+    ${checks ? `<div class="dash-settings-group">${checks}</div>` : ''}
     <div class="actions" style="margin-top: 12px;">
       <button class="primary" id="ws_save">Save</button>
       <button class="danger" id="ws_remove">Remove widget</button>
@@ -1075,7 +1069,7 @@ export async function viewDashboard() {
       const def = WIDGET_DEFS[instance.type];
       if (!def) continue;
       const el = document.createElement('section');
-      el.className = `dash-widget size-${instance.size}`;
+      el.className = 'dash-widget';
       el.dataset.widgetId = instance.id;
       el.dataset.widgetType = instance.type;
       el.innerHTML = `
@@ -1178,7 +1172,6 @@ export async function viewDashboard() {
     if (saveBtn) {
       saveBtn.addEventListener('click', () => {
         const titleInput = modalRoot.querySelector('#ws_title');
-        const sizeSel = modalRoot.querySelector('#ws_size');
         const newConfig = { ...def.defaultConfig };
 
         for (const field of def.settings) {
@@ -1196,16 +1189,8 @@ export async function viewDashboard() {
           }
         }
 
-        const nextSize = sizeSel?.value && WIDGET_SIZES.some((s) => s.value === sizeSel.value) ? sizeSel.value : def.defaultSize;
-        const sizeChanged = instance.size !== nextSize;
         instance.title = titleInput?.value?.trim() || def.title;
-        instance.size = nextSize;
         instance.config = newConfig;
-        if (sizeChanged) {
-          const dims = SIZE_GRID[nextSize] || SIZE_GRID[def.defaultSize] || { w: 4, h: 4 };
-          instance.w = dims.w;
-          instance.h = dims.h;
-        }
 
         layout = {
           version: DASHBOARD_LAYOUT_VERSION,
