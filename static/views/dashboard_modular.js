@@ -239,10 +239,14 @@ function createDashboardContext(asOf, accounts = []) {
       context.selection = { ...context.selection, ...next };
       emitter.emit('selection', context.selection);
     },
-    async getBalances(date) {
-      const key = String(date || asOf);
+    async getBalances(date, opts = {}) {
+      const mode = opts?.mode || 'actual';
+      const fromDate = opts?.fromDate || asOf;
+      const key = `${mode}|${String(date || asOf)}|${mode === 'projected' ? fromDate : ''}`;
       if (balancesCache.has(key)) return balancesCache.get(key);
-      const res = await api(`/api/balances?${new URLSearchParams({ mode: 'actual', as_of: key }).toString()}`);
+      const qs = new URLSearchParams({ mode, as_of: String(date || asOf) });
+      if (mode === 'projected') qs.set('from_date', fromDate);
+      const res = await api(`/api/balances?${qs.toString()}`);
       const data = res.data || [];
       balancesCache.set(key, data);
       for (const acct of data) {
@@ -278,7 +282,7 @@ function createDashboardContext(asOf, accounts = []) {
     accountById,
     async getAccountMeta() {
       if (accountMeta.size) return accountMeta;
-      await context.getBalances(asOf);
+      await context.getBalances(asOf, { mode: 'actual' });
       return accountMeta;
     },
   };
@@ -304,7 +308,6 @@ function createWidgetDefinitions() {
     settings: [
       { key: 'accountId', label: 'Account', type: 'account' },
       { key: 'days', label: 'Window (days)', type: 'number', min: 1, max: 365, step: 1 },
-      { key: 'maxRows', label: 'Max rows', type: 'number', min: 1, max: 50, step: 1 },
       { key: 'syncSelection', label: 'Sync to selection', type: 'checkbox' },
       { key: 'showHidden', label: 'Show hidden accounts', type: 'checkbox' },
     ],
@@ -316,7 +319,6 @@ function createWidgetDefinitions() {
       const update = async () => {
         const cfg = { ...upcoming.defaultConfig, ...(instance.config || {}) };
         const days = clamp(asInt(cfg.days, 7), 1, 365);
-        const maxRows = clamp(asInt(cfg.maxRows, 7), 1, 50);
         const accountId = cfg.accountId ? Number(cfg.accountId) : null;
         const baseDate = cfg.syncSelection && context.selection?.locked ? context.selection.date : context.asOf;
         const toDate = addDaysISO(baseDate, days);
@@ -353,7 +355,7 @@ function createWidgetDefinitions() {
           return na.localeCompare(nb);
         });
 
-        const shown = filtered.slice(0, maxRows);
+        const shown = filtered;
         const total = filtered.reduce((acc, o) => acc + Number(o?.amount_cents ?? 0), 0);
 
         const rows = shown
@@ -386,7 +388,6 @@ function createWidgetDefinitions() {
             <div class="dash-upcoming-total">${totalLine}</div>
           </div>
           ${shown.length ? `<div class="dash-upcoming-list">${rows}</div>` : `<div class="notice">No scheduled expenses in the next ${days} days.</div>`}
-          ${filtered.length > maxRows ? `<div class="dash-upcoming-more">Showing ${maxRows} of ${filtered.length}.</div>` : ''}
         `;
       };
 
@@ -438,8 +439,12 @@ function createWidgetDefinitions() {
 
       const update = async () => {
         const cfg = { ...snapshot.defaultConfig, ...(instance.config || {}) };
-        const baseDate = cfg.syncSelection && context.selection?.locked ? context.selection.date : context.asOf;
-        const balancesAll = await context.getBalances(baseDate);
+        const useProjected = cfg.syncSelection && context.selection?.locked;
+        const baseDate = useProjected ? context.selection.date : context.asOf;
+        const balancesAll = await context.getBalances(baseDate, {
+          mode: useProjected ? 'projected' : 'actual',
+          fromDate: context.asOf,
+        });
         const accountId = cfg.accountId ? Number(cfg.accountId) : null;
 
         const isLiability = (r) => Number(r?.is_liability ?? 0) === 1;
@@ -451,8 +456,8 @@ function createWidgetDefinitions() {
           if (accountId && Number(r.id) !== accountId) return false;
           return true;
         });
-
-        const netWorthCents = balances.reduce((acc, r) => acc + Number(r.balance_cents ?? 0), 0);
+        const balanceCents = (r) => Number(r.balance_cents ?? r.projected_balance_cents ?? 0);
+        const netWorthCents = balances.reduce((acc, r) => acc + balanceCents(r), 0);
 
         if (statsEl) {
           statsEl.innerHTML = `
@@ -460,6 +465,7 @@ function createWidgetDefinitions() {
               <div>
                 <div style="font-size:12px; color: var(--muted);">Net worth</div>
                 <div class="mono" style="font-size:18px; margin-top:4px;">${fmtDollarsAccountingFromCents(netWorthCents)}</div>
+                <div style="font-size:11px; color: var(--muted); margin-top:6px;">As-of ${escapeHtml(baseDate)}${useProjected ? ' (projected)' : ''}</div>
               </div>
               <div style="text-align:right;">
                 <div style="font-size:12px; color: var(--muted);">Accounts</div>
@@ -480,12 +486,10 @@ function createWidgetDefinitions() {
             };
           };
           tableEl.innerHTML = table(
-            ['account', 'opening', 'delta', 'balance'],
+            ['account', 'balance'],
             balances.map((r) => ({
               account: r.name,
-              opening: moneyCell(r.opening_balance_cents),
-              delta: moneyCell(r.delta_cents),
-              balance: moneyCell(r.balance_cents),
+              balance: moneyCell(balanceCents(r)),
             })),
             null,
             {

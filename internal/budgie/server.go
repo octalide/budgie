@@ -654,6 +654,9 @@ func (s *server) balances(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if strings.TrimSpace(from) == "" {
+		from = asOf
+	}
 	if _, e := requireDate(from, "from_date"); e != nil {
 		writeErr(w, e)
 		return
