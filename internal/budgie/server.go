@@ -687,6 +687,7 @@ type balancePoint struct {
 type accountMeta struct {
 	ID                   int64
 	Name                 string
+	OpeningDate          string
 	IsLiability          int64
 	IsInterestBearing    int64
 	InterestAprBps       int64
@@ -696,7 +697,7 @@ type accountMeta struct {
 
 func (s *server) activeAccountMeta() (map[int64]accountMeta, error) {
 	rows, err := s.db.Query(`
-		SELECT id, name,
+		SELECT id, name, opening_date,
 		       COALESCE(is_liability, 0) AS is_liability,
 		       COALESCE(is_interest_bearing, 0) AS is_interest_bearing,
 		       COALESCE(interest_apr_bps, 0) AS interest_apr_bps,
@@ -714,7 +715,7 @@ func (s *server) activeAccountMeta() (map[int64]accountMeta, error) {
 	out := make(map[int64]accountMeta)
 	for rows.Next() {
 		var m accountMeta
-		if err := rows.Scan(&m.ID, &m.Name, &m.IsLiability, &m.IsInterestBearing, &m.InterestAprBps, &m.InterestCompound, &m.ExcludeFromDashboard); err != nil {
+		if err := rows.Scan(&m.ID, &m.Name, &m.OpeningDate, &m.IsLiability, &m.IsInterestBearing, &m.InterestAprBps, &m.InterestCompound, &m.ExcludeFromDashboard); err != nil {
 			return nil, err
 		}
 		out[m.ID] = m
@@ -939,21 +940,61 @@ func (s *server) balancesSeries(w http.ResponseWriter, r *http.Request) {
 	basePrev := make(map[int64]int64)
 	adjPrev := make(map[int64]int64)
 	interestCarry := make(map[int64]float64)
+	openByID := make(map[int64]time.Time)
+	var interestStart time.Time
+	interestStartSet := false
+	for _, m := range metaByID {
+		if strings.TrimSpace(m.OpeningDate) != "" {
+			if od, err := time.Parse("2006-01-02", m.OpeningDate); err == nil {
+				openByID[m.ID] = od
+				if includeInterest && m.IsInterestBearing == 1 {
+					if !interestStartSet || od.Before(interestStart) {
+						interestStart = od
+						interestStartSet = true
+					}
+				}
+			}
+		}
+	}
+	if !interestStartSet {
+		interestStart = fromT
+	}
 
-	for cur := fromT; !cur.After(toT); cur = cur.AddDate(0, 0, stepDays) {
+	projFromDate := from
+	warmStart := fromT
+	warmStepDays := stepDays
+	doWarmup := false
+	if includeInterest && mode == "projected" && interestStart.Before(fromT) {
+		warmStart = interestStart
+		doWarmup = true
+		projFromDate = warmStart.Format("2006-01-02")
+		warmDays := int(fromT.Sub(warmStart).Hours() / 24)
+		const maxWarmPoints = 420
+		if warmDays > 0 {
+			points := warmDays/warmStepDays + 1
+			if points > maxWarmPoints {
+				warmStepDays = int(math.Ceil(float64(warmDays) / float64(maxWarmPoints-1)))
+				if warmStepDays < 1 {
+					warmStepDays = 1
+				}
+			}
+		}
+	}
+
+	var prevDate time.Time
+	hasPrev := false
+
+	processPoint := func(cur time.Time, record bool) *apiErr {
 		asOf := cur.Format("2006-01-02")
-		dates = append(dates, asOf)
-
 		var bal []balancePoint
 		var err error
 		if mode == "actual" {
 			bal, err = s.actualBalancesAsOf(asOf)
 		} else {
-			bal, err = s.projectedBalancesAsOf(from, asOf)
+			bal, err = s.projectedBalancesAsOf(projFromDate, asOf)
 		}
 		if err != nil {
-			writeErr(w, serverError("failed to compute balances series", err))
-			return
+			return serverError("failed to compute balances series", err)
 		}
 
 		if len(accounts) == 0 {
@@ -975,6 +1016,11 @@ func (s *server) balancesSeries(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		daysSincePrev := 0
+		if hasPrev {
+			daysSincePrev = int(cur.Sub(prevDate).Hours() / 24)
+		}
+
 		var sum int64
 		for _, p := range bal {
 			val := p.BalanceCents
@@ -985,21 +1031,29 @@ func (s *server) balancesSeries(w http.ResponseWriter, r *http.Request) {
 				m := metaByID[p.ID]
 				accounts = append(accounts, accountSeries{ID: p.ID, Name: p.Name, IsLiability: m.IsLiability, IsInterestBearing: m.IsInterestBearing, InterestAprBps: m.InterestAprBps, InterestCompound: m.InterestCompound, ExcludeFromDashboard: m.ExcludeFromDashboard})
 				idx = len(accounts) - 1
-				// backfill missing earlier points with zeros
-				for i := 0; i < len(dates)-1; i++ {
-					accounts[idx].BalanceCents = append(accounts[idx].BalanceCents, 0)
+				if record {
+					// backfill missing earlier points with zeros
+					for i := 0; i < len(dates); i++ {
+						accounts[idx].BalanceCents = append(accounts[idx].BalanceCents, 0)
+					}
 				}
 				basePrev[p.ID] = p.BalanceCents
 				adjPrev[p.ID] = p.BalanceCents
 			}
 
-			if includeInterest {
+			if includeInterest && hasPrev && daysSincePrev > 0 {
 				m := metaByID[p.ID]
 				bp := basePrev[p.ID]
 				delta := p.BalanceCents - bp
 				ap := adjPrev[p.ID]
-				if m.IsInterestBearing == 1 && m.InterestAprBps > 0 {
-					interest := interestForPeriod(ap, m.InterestAprBps, m.InterestCompound, stepDays)
+				applyInterest := m.IsInterestBearing == 1 && m.InterestAprBps > 0
+				if applyInterest {
+					if od, ok := openByID[p.ID]; ok && cur.Before(od) {
+						applyInterest = false
+					}
+				}
+				if applyInterest {
+					interest := interestForPeriod(ap, m.InterestAprBps, m.InterestCompound, daysSincePrev)
 					carry := interestCarry[p.ID] + interest
 					interestCents := int64(math.Trunc(carry))
 					interestCarry[p.ID] = carry - float64(interestCents)
@@ -1009,18 +1063,44 @@ func (s *server) balancesSeries(w http.ResponseWriter, r *http.Request) {
 				}
 				basePrev[p.ID] = p.BalanceCents
 				adjPrev[p.ID] = val
+			} else if includeInterest && !hasPrev {
+				basePrev[p.ID] = p.BalanceCents
+				adjPrev[p.ID] = p.BalanceCents
 			}
 
 			sum += val
-			accounts[idx].BalanceCents = append(accounts[idx].BalanceCents, val)
-		}
-		totalCents = append(totalCents, sum)
-
-		// Ensure every account series has a point for this date.
-		for i := range accounts {
-			if len(accounts[i].BalanceCents) < len(dates) {
-				accounts[i].BalanceCents = append(accounts[i].BalanceCents, 0)
+			if record {
+				accounts[idx].BalanceCents = append(accounts[idx].BalanceCents, val)
 			}
+		}
+		if record {
+			dates = append(dates, asOf)
+			totalCents = append(totalCents, sum)
+			// Ensure every account series has a point for this date.
+			for i := range accounts {
+				if len(accounts[i].BalanceCents) < len(dates) {
+					accounts[i].BalanceCents = append(accounts[i].BalanceCents, 0)
+				}
+			}
+		}
+		prevDate = cur
+		hasPrev = true
+		return nil
+	}
+
+	if doWarmup {
+		for cur := warmStart; cur.Before(fromT); cur = cur.AddDate(0, 0, warmStepDays) {
+			if e := processPoint(cur, false); e != nil {
+				writeErr(w, e)
+				return
+			}
+		}
+	}
+
+	for cur := fromT; !cur.After(toT); cur = cur.AddDate(0, 0, stepDays) {
+		if e := processPoint(cur, true); e != nil {
+			writeErr(w, e)
+			return
 		}
 	}
 
