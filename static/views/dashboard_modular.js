@@ -1286,7 +1286,6 @@ function createWidgetDefinitions() {
       { key: 'includeInterest', label: 'Include interest', type: 'checkbox' },
       { key: 'stepDays', label: 'Granularity (days)', type: 'number', min: 1, max: 366, step: 1 },
       { key: 'monthsAhead', label: 'Months ahead', type: 'number', min: 1, max: 24, step: 1 },
-      { key: 'showLiabilities', label: 'Show liabilities', type: 'checkbox' },
       { key: 'showHidden', label: 'Show hidden accounts', type: 'checkbox' },
     ],
     mount({ root, context, instance }) {
@@ -1381,17 +1380,18 @@ function createWidgetDefinitions() {
         return stableSeriesColor(String(key), 0.92);
       };
 
-      const ensureSelected = (accounts) => {
+      const ensureSelected = (accounts, allowNet) => {
         if (!state.selected.size) {
           state.selected.add('gross');
-          state.selected.add('net');
+          if (allowNet) state.selected.add('net');
         }
         const visible = new Set(accounts.map((a) => String(a.id)));
         for (const key of Array.from(state.selected)) {
           if (key !== 'gross' && key !== 'net' && !visible.has(key)) state.selected.delete(key);
         }
         if (!state.selected.has('gross')) state.selected.add('gross');
-        if (!state.selected.has('net')) state.selected.add('net');
+        if (allowNet && !state.selected.has('net')) state.selected.add('net');
+        if (!allowNet) state.selected.delete('net');
       };
 
       const redraw = (cfg) => {
@@ -1402,6 +1402,7 @@ function createWidgetDefinitions() {
         const lineAccounts = filteredAccounts(cfg, { includeLiabilities: Boolean(cfg.showLiabilities) });
         const grossAccounts = filteredAccounts(cfg, { includeLiabilities: false });
         const netAccounts = filteredAccounts(cfg, { includeLiabilities: true });
+        const allowNet = Boolean(cfg.showLiabilities);
         const acctKeys = lineAccounts.map((a) => `acct:${String(a.id)}:${a.name || ''}`);
         const palette = distinctSeriesPalette(acctKeys, 0.92, { seed: 'accounts' });
         const colorFor = (key) => {
@@ -1421,7 +1422,7 @@ function createWidgetDefinitions() {
           });
         }
 
-        if (sel.has('net')) {
+        if (allowNet && sel.has('net')) {
           series.push({
             name: 'Net',
             values: netSeries.map((v) => Number(v)),
@@ -1465,7 +1466,8 @@ function createWidgetDefinitions() {
         const lineAccounts = filteredAccounts(cfg, { includeLiabilities: Boolean(cfg.showLiabilities) });
         const grossAccounts = filteredAccounts(cfg, { includeLiabilities: false });
         const netAccounts = filteredAccounts(cfg, { includeLiabilities: true });
-        ensureSelected(lineAccounts);
+        const allowNet = Boolean(cfg.showLiabilities);
+        ensureSelected(lineAccounts, allowNet);
 
         const acctKeys = lineAccounts.map((a) => `acct:${String(a.id)}:${a.name || ''}`);
         const palette = distinctSeriesPalette(acctKeys, 0.92, { seed: 'accounts' });
@@ -1493,10 +1495,10 @@ function createWidgetDefinitions() {
         );
         lines.push(
           `<label class="chart-line">
-            <input type="checkbox" data-line="net" ${state.selected.has('net') ? 'checked' : ''} />
+            <input type="checkbox" data-line="net" ${allowNet && state.selected.has('net') ? 'checked' : ''} ${allowNet ? '' : 'disabled'} />
             <span class="chart-swatch" style="background:${colorFor('net')}"></span>
             <span title="assets - liabilities">Net</span>
-            <span class="chart-line-val mono" title="${escapeHtml(date)}">${valText(netSeries[idx] ?? 0)}</span>
+            <span class="chart-line-val mono" title="${escapeHtml(date)}">${allowNet ? valText(netSeries[idx] ?? 0) : '—'}</span>
           </label>`
         );
 
@@ -1518,16 +1520,21 @@ function createWidgetDefinitions() {
           <div class="chart-lines-actions">
             <button data-lines-all type="button">All</button>
             <button data-lines-none type="button">None</button>
+            <label class="chart-line" style="margin-left: 6px;">
+              <input type="checkbox" data-lines-liabilities ${allowNet ? 'checked' : ''} />
+              <span>Show liabilities</span>
+            </label>
           </div>
           <div class="chart-lines-list">${lines.join('')}</div>
         `;
 
         const allBtn = linesBox.querySelector('[data-lines-all]');
         const noneBtn = linesBox.querySelector('[data-lines-none]');
+        const liabToggle = linesBox.querySelector('[data-lines-liabilities]');
         allBtn.onclick = () => {
           state.selected.clear();
           state.selected.add('gross');
-          state.selected.add('net');
+          if (allowNet) state.selected.add('net');
           for (const a of lineAccounts) state.selected.add(String(a.id));
           renderLines(cfg);
           redraw(cfg);
@@ -1535,10 +1542,22 @@ function createWidgetDefinitions() {
         noneBtn.onclick = () => {
           state.selected.clear();
           state.selected.add('gross');
-          state.selected.add('net');
+          if (allowNet) state.selected.add('net');
           renderLines(cfg);
           redraw(cfg);
         };
+
+        if (liabToggle) {
+          liabToggle.onchange = () => {
+            const next = Boolean(liabToggle.checked);
+            if (!next) state.selected.delete('net');
+            if (context.updateWidgetConfig) context.updateWidgetConfig(instance.id, { showLiabilities: next });
+            else instance.config = { ...(instance.config || {}), showLiabilities: next };
+            const nextCfg = { ...projection.defaultConfig, ...(instance.config || {}), showLiabilities: next };
+            renderLines(nextCfg);
+            redraw(nextCfg);
+          };
+        }
 
         linesBox.querySelectorAll('input[data-line]').forEach((inp) => {
           inp.onchange = () => {
@@ -1576,7 +1595,7 @@ function createWidgetDefinitions() {
           });
           state.selected.clear();
           state.selected.add('gross');
-          state.selected.add('net');
+          if (cfg.showLiabilities) state.selected.add('net');
           const lineAccounts = filteredAccounts(cfg, { includeLiabilities: Boolean(cfg.showLiabilities) });
           for (const a of lineAccounts) state.selected.add(String(a.id));
         }
@@ -1771,6 +1790,15 @@ export async function viewDashboard() {
     } catch {
       // ignore layout save errors
     }
+  };
+
+  context.updateWidgetConfig = (id, patch) => {
+    const instance = layout.widgets.find((w) => w.id === id);
+    if (!instance) return;
+    const base = instance.config && typeof instance.config === 'object' ? instance.config : {};
+    const next = typeof patch === 'function' ? patch({ ...base }) : { ...base, ...(patch || {}) };
+    instance.config = next;
+    saveLayout();
   };
 
   const getConstraints = (instance) => {
