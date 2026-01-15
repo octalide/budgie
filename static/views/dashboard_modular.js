@@ -30,6 +30,52 @@ function clamp(n, lo, hi) {
   return Math.max(lo, Math.min(hi, n));
 }
 
+function isoToDayNumber(iso) {
+  const t = Date.parse(`${iso}T00:00:00Z`);
+  if (!Number.isFinite(t)) return NaN;
+  return Math.floor(t / 86400000);
+}
+
+function lowerBound(arr, x) {
+  let lo = 0;
+  let hi = arr.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (arr[mid] < x) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+function buildDateAxis(fromISO, toISO, stepDays) {
+  const step = Math.max(1, Math.floor(Number(stepDays || 1)));
+  const start = isoToDayNumber(fromISO);
+  const end = isoToDayNumber(toISO);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return { dates: [], days: [] };
+
+  const days = [];
+  const dates = [];
+  for (let d = start; d <= end; d += step) {
+    days.push(d);
+    const dt = new Date(d * 86400000);
+    const y = dt.getUTCFullYear();
+    const m = String(dt.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(dt.getUTCDate()).padStart(2, '0');
+    dates.push(`${y}-${m}-${day}`);
+  }
+
+  if (days[days.length - 1] !== end) {
+    days.push(end);
+    const dt = new Date(end * 86400000);
+    const y = dt.getUTCFullYear();
+    const m = String(dt.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(dt.getUTCDate()).padStart(2, '0');
+    dates.push(`${y}-${m}-${day}`);
+  }
+
+  return { dates, days };
+}
+
 function asInt(v, fallback) {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
@@ -227,6 +273,7 @@ function createDashboardContext(asOf, accounts = []) {
   const balancesCache = new Map();
   const seriesCache = new Map();
   const occurrencesCache = new Map();
+  const entriesCache = new Map();
   let accountMeta = new Map();
   const accountById = new Map((accounts || []).map((a) => [Number(a.id), a]));
 
@@ -276,6 +323,14 @@ function createDashboardContext(asOf, accounts = []) {
       const res = await api(`/api/occurrences?${qs.toString()}`);
       const data = res.data || [];
       occurrencesCache.set(key, data);
+      return data;
+    },
+    async getEntries() {
+      const key = 'all';
+      if (entriesCache.has(key)) return entriesCache.get(key);
+      const res = await api('/api/entries');
+      const data = res.data || [];
+      entriesCache.set(key, data);
       return data;
     },
     accounts,
@@ -517,6 +572,524 @@ function createWidgetDefinitions() {
     },
   };
 
+  const balanceCard = {
+    type: 'balance_card',
+    title: 'Account balance',
+    description: 'Single-account balance card with selection sync.',
+    defaultSize: 'md',
+    minW: 2,
+    minH: 2,
+    defaultConfig: {
+      accountId: '',
+      syncSelection: true,
+    },
+    settings: [
+      { key: 'accountId', label: 'Account', type: 'account' },
+      { key: 'syncSelection', label: 'Sync to selection', type: 'checkbox' },
+    ],
+    mount({ root, context, instance }) {
+      const body = root.querySelector('.dash-widget-body');
+      body.innerHTML = `
+        <div class="dash-balance-card">
+          <div class="dash-balance-title"></div>
+          <div class="dash-balance-value mono"></div>
+          <div class="dash-balance-sub"></div>
+        </div>
+      `;
+      const titleEl = body.querySelector('.dash-balance-title');
+      const valueEl = body.querySelector('.dash-balance-value');
+      const subEl = body.querySelector('.dash-balance-sub');
+
+      const update = async () => {
+        const cfg = { ...balanceCard.defaultConfig, ...(instance.config || {}) };
+        const accountId = cfg.accountId ? Number(cfg.accountId) : null;
+        if (!accountId) {
+          if (titleEl) titleEl.textContent = 'Account balance';
+          if (valueEl) valueEl.textContent = '—';
+          if (subEl) subEl.textContent = 'Select an account in settings.';
+          return;
+        }
+
+        const useProjected = cfg.syncSelection && context.selection?.locked;
+        const baseDate = useProjected ? context.selection.date : context.asOf;
+        const balances = await context.getBalances(baseDate, {
+          mode: useProjected ? 'projected' : 'actual',
+          fromDate: context.asOf,
+        });
+
+        const row = (balances || []).find((r) => Number(r.id) === accountId);
+        const name = row?.name || context.accountById.get(accountId)?.name || `Account #${accountId}`;
+        const cents = Number(row?.balance_cents ?? row?.projected_balance_cents ?? 0);
+
+        if (titleEl) titleEl.textContent = name;
+        if (valueEl) valueEl.textContent = fmtDollarsAccountingFromCents(cents);
+        if (subEl) subEl.textContent = `As-of ${baseDate}${useProjected ? ' (projected)' : ''}`;
+      };
+
+      const unsub = context.on('selection', () => update());
+      update();
+
+      return {
+        update,
+        resize() {},
+        destroy() {
+          unsub();
+        },
+      };
+    },
+  };
+
+  const recentEntries = {
+    type: 'recent_entries',
+    title: 'Recent entries',
+    description: 'Latest manual entries with account filtering.',
+    defaultSize: 'md',
+    minW: 2,
+    minH: 2,
+    defaultConfig: {
+      accountId: '',
+      limit: 20,
+    },
+    settings: [
+      { key: 'accountId', label: 'Account', type: 'account' },
+      { key: 'limit', label: 'Rows', type: 'number', min: 5, max: 200, step: 1 },
+    ],
+    mount({ root, context, instance }) {
+      const body = root.querySelector('.dash-widget-body');
+      body.innerHTML = `<div class="dash-entries"></div>`;
+      const box = body.querySelector('.dash-entries');
+      const tableId = `dashboard-entries-${instance.id}`;
+
+      const update = async () => {
+        const cfg = { ...recentEntries.defaultConfig, ...(instance.config || {}) };
+        const accountId = cfg.accountId ? Number(cfg.accountId) : null;
+        const limit = clamp(asInt(cfg.limit, 20), 5, 200);
+        const entries = await context.getEntries();
+
+        const filtered = (entries || [])
+          .filter((e) => {
+            if (!accountId) return true;
+            return Number(e?.src_account_id) === accountId || Number(e?.dest_account_id) === accountId;
+          })
+          .slice(0, limit);
+
+        const rows = filtered.map((e) => ({
+          date: e.entry_date,
+          name: e.name,
+          amount: {
+            text: fmtDollarsAccountingFromCents(Number(e.amount_cents ?? 0)),
+            className: Number(e.amount_cents ?? 0) < 0 ? 'num neg mono' : 'num mono',
+            title: String(e.amount_cents ?? ''),
+          },
+          src: e.src_account_name || '',
+          dest: e.dest_account_name || '',
+        }));
+
+        if (!rows.length) {
+          box.innerHTML = `<div class="notice">No entries found.</div>`;
+          return;
+        }
+
+        box.innerHTML = table(['date', 'name', 'amount', 'src', 'dest'], rows, null, {
+          id: tableId,
+          filter: false,
+        });
+      };
+
+      update();
+
+      return {
+        update,
+        resize() {},
+        destroy() {},
+      };
+    },
+  };
+
+  const projectionTxns = {
+    type: 'projection_txns',
+    title: 'Scheduled transactions',
+    description: 'Scheduled feed linked to the projection selection window.',
+    defaultSize: 'md',
+    minW: 2,
+    minH: 2,
+    defaultConfig: {
+      windowDays: 14,
+      syncSelection: true,
+      showHidden: false,
+      accountId: '',
+    },
+    settings: [
+      { key: 'accountId', label: 'Account', type: 'account' },
+      { key: 'windowDays', label: 'Window (days)', type: 'number', min: 3, max: 120, step: 1 },
+      { key: 'syncSelection', label: 'Sync to selection', type: 'checkbox' },
+      { key: 'showHidden', label: 'Show hidden accounts', type: 'checkbox' },
+    ],
+    mount({ root, context, instance }) {
+      const body = root.querySelector('.dash-widget-body');
+      body.innerHTML = `
+        <div class="dash-txns">
+          <div class="dash-txns-sub"></div>
+          <div class="dash-txns-table"></div>
+        </div>
+      `;
+      const subEl = body.querySelector('.dash-txns-sub');
+      const tableEl = body.querySelector('.dash-txns-table');
+      const tableId = `dashboard-txns-${instance.id}`;
+
+      const acctName = (id) => {
+        if (id === null || id === undefined || id === '') return '';
+        const n = Number(id);
+        if (!Number.isFinite(n)) return '';
+        return context.accountById.get(n)?.name || String(id);
+      };
+
+      const update = async () => {
+        const cfg = { ...projectionTxns.defaultConfig, ...(instance.config || {}) };
+        const windowDays = clamp(asInt(cfg.windowDays, 14), 3, 120);
+        const accountId = cfg.accountId ? Number(cfg.accountId) : null;
+        const baseDate = cfg.syncSelection && context.selection?.locked ? context.selection.date : context.asOf;
+        const half = Math.floor(windowDays / 2);
+        const fromDate = addDaysISO(baseDate, -half);
+        const toDate = addDaysISO(baseDate, half);
+
+        const occ = await context.getOccurrences(fromDate, toDate);
+        const meta = await context.getAccountMeta();
+
+        const isHidden = (id) => {
+          if (id === null || id === undefined || id === '') return false;
+          const n = Number(id);
+          if (!Number.isFinite(n)) return false;
+          return Number(meta.get(n)?.exclude_from_dashboard ?? 0) === 1;
+        };
+
+        const filtered = (occ || []).filter((o) => {
+          if (!cfg.showHidden && isHidden(o?.src_account_id)) return false;
+          if (accountId) {
+            const src = Number(o?.src_account_id);
+            const dest = Number(o?.dest_account_id);
+            if (src !== accountId && dest !== accountId) return false;
+          }
+          return true;
+        });
+
+        filtered.sort((a, b) => {
+          const da = String(a?.occ_date || '');
+          const db = String(b?.occ_date || '');
+          if (da < db) return -1;
+          if (da > db) return 1;
+          const na = String(a?.name || '');
+          const nb = String(b?.name || '');
+          return na.localeCompare(nb);
+        });
+
+        if (subEl) subEl.textContent = `${fromDate} → ${toDate}`;
+
+        const rows = filtered.map((o) => ({
+          date: o.occ_date,
+          kind: o.kind,
+          name: o.name,
+          amount: {
+            text: fmtDollarsAccountingFromCents(Number(o.amount_cents ?? 0)),
+            className: Number(o.amount_cents ?? 0) < 0 ? 'num neg mono' : 'num mono',
+            title: String(o.amount_cents ?? ''),
+          },
+          src: acctName(o.src_account_id),
+          dest: acctName(o.dest_account_id),
+        }));
+
+        tableEl.innerHTML = rows.length
+          ? table(['date', 'kind', 'name', 'amount', 'src', 'dest'], rows, null, {
+              id: tableId,
+              filter: true,
+              filterPlaceholder: 'Filter scheduled…',
+            })
+          : `<div class="notice">No scheduled transactions in this window.</div>`;
+        wireTableFilters(body);
+      };
+
+      const unsub = context.on('selection', () => update());
+      update();
+
+      return {
+        update,
+        resize() {},
+        destroy() {
+          unsub();
+        },
+      };
+    },
+  };
+
+  const expensesChart = {
+    type: 'expenses_chart',
+    title: 'Expenses chart',
+    description: 'Top scheduled expenses over time (cumulative).',
+    defaultSize: 'lg',
+    minW: 3,
+    minH: 3,
+    defaultConfig: {
+      monthsAhead: 6,
+      stepDays: 7,
+      topN: 8,
+    },
+    settings: [
+      { key: 'monthsAhead', label: 'Months ahead', type: 'number', min: 1, max: 24, step: 1 },
+      { key: 'stepDays', label: 'Granularity (days)', type: 'number', min: 1, max: 366, step: 1 },
+      { key: 'topN', label: 'Top schedules', type: 'number', min: 3, max: 40, step: 1 },
+    ],
+    mount({ root, context, instance }) {
+      const body = root.querySelector('.dash-widget-body');
+      body.innerHTML = `
+        <div class="dash-expenses">
+          <div class="dash-selection"></div>
+          <div>
+            <label>Lines</label>
+            <div class="chart-lines"></div>
+          </div>
+          <div class="dash-projection-chart">
+            <label>Expenses</label>
+            <canvas class="chart chart--small"></canvas>
+          </div>
+        </div>
+      `;
+
+      const selectionEl = body.querySelector('.dash-selection');
+      const linesBox = body.querySelector('.chart-lines');
+      const canvas = body.querySelector('canvas.chart');
+
+      const state = {
+        axis: { dates: [], days: [] },
+        groups: [],
+        selected: new Set(['total']),
+        lockedIdx: null,
+        totalCum: [],
+      };
+
+      const selectedIndex = () => {
+        const n = state.axis?.dates?.length || 0;
+        const idx = state.lockedIdx === null || state.lockedIdx === undefined ? 0 : Number(state.lockedIdx);
+        if (!Number.isFinite(idx) || n <= 0) return 0;
+        return clamp(Math.round(idx), 0, n - 1);
+      };
+
+      const updateSelectionLabel = () => {
+        if (!selectionEl) return;
+        const idx = selectedIndex();
+        const date = state.axis?.dates?.[idx] || context.asOf;
+        if (state.lockedIdx === null || state.lockedIdx === undefined) {
+          selectionEl.innerHTML = `Selection: <span class="mono">${escapeHtml(date)}</span> (timeline start — click chart to lock)`;
+        } else {
+          selectionEl.innerHTML = `Selection locked: <span class="mono">${escapeHtml(date)}</span> (Shift+click or Esc to clear)`;
+        }
+      };
+
+      const fetchAndCompute = async (cfg) => {
+        const fromDate = context.asOf;
+        const toDate = addMonthsISO(fromDate, clamp(asInt(cfg.monthsAhead, 6), 1, 24));
+        state.axis = buildDateAxis(fromDate, toDate, clamp(asInt(cfg.stepDays, 7), 1, 366));
+        if (!state.axis.dates.length) {
+          state.groups = [];
+          state.totalCum = [];
+          return;
+        }
+
+        const occ = await context.getOccurrences(fromDate, toDate);
+        const bySched = new Map();
+        for (const o of occ || []) {
+          if (!o) continue;
+          if (String(o.kind || '') !== 'E') continue;
+          const sid = Number(o.schedule_id);
+          if (!Number.isFinite(sid)) continue;
+          const name = String(o.name || `Schedule #${sid}`);
+          const amt = Number(o.amount_cents ?? 0);
+          const d = String(o.occ_date || '');
+          const dn = isoToDayNumber(d);
+          if (!Number.isFinite(dn)) continue;
+
+          let g = bySched.get(sid);
+          if (!g) {
+            g = {
+              id: sid,
+              name,
+              total: 0,
+              buckets: new Array(state.axis.dates.length).fill(0),
+            };
+            bySched.set(sid, g);
+          }
+
+          g.total += amt;
+          let idx = lowerBound(state.axis.days, dn);
+          if (idx >= state.axis.days.length) idx = state.axis.days.length - 1;
+          g.buckets[idx] += amt;
+        }
+
+        const all = Array.from(bySched.values());
+        all.sort((a, b) => (b.total || 0) - (a.total || 0));
+        state.groups = all.slice(0, clamp(asInt(cfg.topN, 8), 3, 40));
+
+        state.selected.clear();
+        state.selected.add('total');
+        state.groups.slice(0, 5).forEach((g) => state.selected.add(String(g.id)));
+
+        for (const g of state.groups) {
+          let run = 0;
+          g.cum = g.buckets.map((v) => {
+            run += Number(v ?? 0);
+            return run;
+          });
+        }
+
+        const totalBuckets = new Array(state.axis.dates.length).fill(0);
+        for (const g of all) {
+          for (let i = 0; i < totalBuckets.length; i++) totalBuckets[i] += Number(g.buckets?.[i] ?? 0);
+        }
+        let totRun = 0;
+        state.totalCum = totalBuckets.map((v) => {
+          totRun += Number(v ?? 0);
+          return totRun;
+        });
+      };
+
+      const renderLines = () => {
+        if (!linesBox) return;
+        if (!state.axis?.dates?.length) {
+          linesBox.innerHTML = `<div class="notice">No date axis.</div>`;
+          return;
+        }
+        if (!state.groups.length) {
+          linesBox.innerHTML = `<div class="notice">No scheduled expenses in this window.</div>`;
+          return;
+        }
+
+        const idx = selectedIndex();
+        const date = state.axis.dates[idx] || context.asOf;
+
+        const keys = state.groups.map((g) => `sched:${g.id}:${g.name}`);
+        const palette = distinctSeriesPalette(keys, 0.92, { seed: 'expenses' });
+        const colorFor = (key) => {
+          if (key === 'total') return 'hsla(40, 80%, 72%, 0.92)';
+          return palette.get(String(key)) || stableSeriesColor(String(key), 0.92);
+        };
+
+        const valText = (cents) => escapeHtml(fmtDollarsAccountingFromCents(Number(cents ?? 0)));
+        const lines = [];
+        lines.push(
+          `<label class="chart-line">
+            <input type="checkbox" data-line="total" ${state.selected.has('total') ? 'checked' : ''} />
+            <span class="chart-swatch" style="background:${colorFor('total')}"></span>
+            <span>Total spend</span>
+            <span class="chart-line-val mono" title="${escapeHtml(date)}">${valText(state.totalCum?.[idx] ?? 0)}</span>
+          </label>`
+        );
+
+        for (const g of state.groups) {
+          const id = String(g.id);
+          const key = `sched:${g.id}:${g.name}`;
+          lines.push(
+            `<label class="chart-line">
+              <input type="checkbox" data-line="${id}" ${state.selected.has(id) ? 'checked' : ''} />
+              <span class="chart-swatch" style="background:${colorFor(key)}"></span>
+              <span>${escapeHtml(g.name)}</span>
+              <span class="chart-line-val mono" title="${escapeHtml(date)}">${valText(g.cum?.[idx] ?? 0)}</span>
+            </label>`
+          );
+        }
+
+        linesBox.innerHTML = `
+          <div class="chart-lines-actions">
+            <button data-lines-all type="button">All</button>
+            <button data-lines-none type="button">None</button>
+          </div>
+          <div class="chart-lines-list">${lines.join('')}</div>
+        `;
+
+        const allBtn = linesBox.querySelector('[data-lines-all]');
+        const noneBtn = linesBox.querySelector('[data-lines-none]');
+        allBtn.onclick = () => {
+          state.selected.clear();
+          state.selected.add('total');
+          for (const g of state.groups) state.selected.add(String(g.id));
+          renderLines();
+          redrawChart();
+        };
+        noneBtn.onclick = () => {
+          state.selected.clear();
+          state.selected.add('total');
+          renderLines();
+          redrawChart();
+        };
+
+        linesBox.querySelectorAll('input[data-line]').forEach((inp) => {
+          inp.onchange = () => {
+            const key = inp.getAttribute('data-line');
+            if (!key) return;
+            if (inp.checked) state.selected.add(key);
+            else state.selected.delete(key);
+            redrawChart();
+          };
+        });
+      };
+
+      const redrawChart = () => {
+        if (!canvas || !state.axis?.dates?.length) return;
+
+        const keys = state.groups.map((g) => `sched:${g.id}:${g.name}`);
+        const palette = distinctSeriesPalette(keys, 0.92, { seed: 'expenses' });
+        const colorFor = (key) => {
+          if (key === 'total') return 'hsla(40, 80%, 72%, 0.92)';
+          return palette.get(String(key)) || stableSeriesColor(String(key), 0.92);
+        };
+
+        const series = [];
+        if (state.selected.has('total')) {
+          series.push({ name: 'Total spend', values: (state.totalCum || []).map((v) => Number(v)), color: colorFor('total'), width: 3 });
+        }
+        for (const g of state.groups) {
+          const id = String(g.id);
+          if (!state.selected.has(id)) continue;
+          const k = `sched:${g.id}:${g.name}`;
+          series.push({ name: g.name, values: (g.cum || []).map((v) => Number(v)), color: colorFor(k), width: 2 });
+        }
+
+        drawLineChart(canvas, {
+          labels: state.axis.dates,
+          series,
+          xTicks: 4,
+          crosshair: {
+            lockOnClick: true,
+            lockedIndex: state.lockedIdx,
+            onLockedIndexChange: (idx) => {
+              state.lockedIdx = idx;
+              updateSelectionLabel();
+              renderLines();
+              redrawChart();
+            },
+          },
+          formatValue: (v) => fmtDollarsAccountingFromCents(Math.round(v)),
+        });
+      };
+
+      const update = async () => {
+        const cfg = { ...expensesChart.defaultConfig, ...(instance.config || {}) };
+        await fetchAndCompute(cfg);
+        updateSelectionLabel();
+        renderLines();
+        redrawChart();
+      };
+
+      update();
+
+      return {
+        update,
+        resize() {
+          redrawChart();
+        },
+        destroy() {},
+      };
+    },
+  };
+
   const projection = {
     type: 'projection',
     title: 'Projection',
@@ -561,7 +1134,7 @@ function createWidgetDefinitions() {
       const canvas = body.querySelector('canvas.chart');
 
       const state = {
-        selected: new Set(['total']),
+        selected: new Set(['total', 'net']),
         lockedIdx: null,
         seriesData: null,
         seriesKey: '',
@@ -607,13 +1180,43 @@ function createWidgetDefinitions() {
         return out;
       };
 
+      const computeNetSeries = (accountsVisible, cfg) => {
+        const dates = state.seriesData?.dates || [];
+        const assets = new Array(dates.length).fill(0);
+        const liab = new Array(dates.length).fill(0);
+
+        for (const a of accountsVisible || []) {
+          const isL = Number(a?.is_liability ?? 0) === 1;
+          if (isL && !cfg.includeLiabilities) continue;
+
+          const vals = a.balance_cents || [];
+          for (let i = 0; i < dates.length; i++) {
+            const v = Number(vals[i] ?? 0);
+            if (isL) liab[i] += Math.abs(v);
+            else assets[i] += v;
+          }
+        }
+
+        return assets.map((v, i) => v - (liab[i] ?? 0));
+      };
+
+      const fixedLineColor = (key) => {
+        if (key === 'total') return 'hsla(210, 15%, 92%, 0.92)';
+        if (key === 'net') return 'hsla(150, 55%, 74%, 0.92)';
+        return stableSeriesColor(String(key), 0.92);
+      };
+
       const ensureSelected = (accounts) => {
-        if (!state.selected.size) state.selected.add('total');
+        if (!state.selected.size) {
+          state.selected.add('total');
+          state.selected.add('net');
+        }
         const visible = new Set(accounts.map((a) => String(a.id)));
         for (const key of Array.from(state.selected)) {
-          if (key !== 'total' && !visible.has(key)) state.selected.delete(key);
+          if (key !== 'total' && key !== 'net' && !visible.has(key)) state.selected.delete(key);
         }
         if (!state.selected.has('total')) state.selected.add('total');
+        if (!state.selected.has('net')) state.selected.add('net');
       };
 
       const redraw = (cfg) => {
@@ -622,20 +1225,35 @@ function createWidgetDefinitions() {
         const series = [];
 
         const accounts = filteredAccounts(cfg);
+        const visibleAccounts = state.seriesData?.accounts || [];
         const acctKeys = accounts.map((a) => `acct:${String(a.id)}:${a.name || ''}`);
         const palette = distinctSeriesPalette(acctKeys, 0.92, { seed: 'accounts' });
         const colorFor = (key) => {
-          if (key === 'total') return 'hsla(210, 15%, 92%, 0.92)';
+          if (key === 'total' || key === 'net') return fixedLineColor(key);
           return palette.get(String(key)) || stableSeriesColor(String(key), 0.92);
         };
 
         const totalSeries = computeTotalSeries(accounts);
+        const netSource = cfg.accountId ? accounts : visibleAccounts || [];
+        const netSeries = computeNetSeries(
+          netSource.filter((a) => (cfg.showHidden ? true : Number(a.exclude_from_dashboard ?? 0) !== 1)),
+          cfg
+        );
 
         if (sel.has('total')) {
           series.push({
             name: 'Total',
             values: totalSeries.map((v) => Number(v)),
             color: colorFor('total'),
+            width: 3,
+          });
+        }
+
+        if (sel.has('net')) {
+          series.push({
+            name: 'Net',
+            values: netSeries.map((v) => Number(v)),
+            color: colorFor('net'),
             width: 3,
           });
         }
@@ -673,12 +1291,13 @@ function createWidgetDefinitions() {
       const renderLines = (cfg) => {
         if (!linesBox || !state.seriesData) return;
         const accounts = filteredAccounts(cfg);
+        const visibleAccounts = state.seriesData?.accounts || [];
         ensureSelected(accounts);
 
         const acctKeys = accounts.map((a) => `acct:${String(a.id)}:${a.name || ''}`);
         const palette = distinctSeriesPalette(acctKeys, 0.92, { seed: 'accounts' });
         const colorFor = (key) => {
-          if (key === 'total') return 'hsla(210, 15%, 92%, 0.92)';
+          if (key === 'total' || key === 'net') return fixedLineColor(key);
           return palette.get(String(key)) || stableSeriesColor(String(key), 0.92);
         };
 
@@ -689,6 +1308,11 @@ function createWidgetDefinitions() {
         const valText = (cents) => escapeHtml(fmtDollarsAccountingFromCents(Number(cents ?? 0)));
 
         const totalSeries = computeTotalSeries(accounts);
+        const netSource = cfg.accountId ? accounts : visibleAccounts || [];
+        const netSeries = computeNetSeries(
+          netSource.filter((a) => (cfg.showHidden ? true : Number(a.exclude_from_dashboard ?? 0) !== 1)),
+          cfg
+        );
         const lines = [];
         lines.push(
           `<label class="chart-line">
@@ -696,6 +1320,14 @@ function createWidgetDefinitions() {
             <span class="chart-swatch" style="background:${colorFor('total')}"></span>
             <span>Total</span>
             <span class="chart-line-val mono" title="${escapeHtml(date)}">${valText(totalSeries[idx] ?? 0)}</span>
+          </label>`
+        );
+        lines.push(
+          `<label class="chart-line">
+            <input type="checkbox" data-line="net" ${state.selected.has('net') ? 'checked' : ''} />
+            <span class="chart-swatch" style="background:${colorFor('net')}"></span>
+            <span title="assets - liabilities">Net</span>
+            <span class="chart-line-val mono" title="${escapeHtml(date)}">${valText(netSeries[idx] ?? 0)}</span>
           </label>`
         );
 
@@ -726,6 +1358,7 @@ function createWidgetDefinitions() {
         allBtn.onclick = () => {
           state.selected.clear();
           state.selected.add('total');
+          state.selected.add('net');
           for (const a of accounts) state.selected.add(String(a.id));
           renderLines(cfg);
           redraw(cfg);
@@ -733,6 +1366,7 @@ function createWidgetDefinitions() {
         noneBtn.onclick = () => {
           state.selected.clear();
           state.selected.add('total');
+          state.selected.add('net');
           renderLines(cfg);
           redraw(cfg);
         };
@@ -774,6 +1408,7 @@ function createWidgetDefinitions() {
           });
           state.selected.clear();
           state.selected.add('total');
+          state.selected.add('net');
           const accounts = filteredAccounts(cfg);
           for (const a of accounts) state.selected.add(String(a.id));
         }
@@ -824,7 +1459,7 @@ function createWidgetDefinitions() {
     },
   };
 
-  return { upcoming, snapshot, projection };
+  return { upcoming, snapshot, balanceCard, recentEntries, projectionTxns, expensesChart, projection };
 }
 
 function widgetSettingsForm(def, instance, accounts = []) {

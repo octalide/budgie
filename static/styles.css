@@ -524,6 +524,51 @@ body.auth-logged-out .sidebar {
     min-height: 0;
 }
 
+.dash-balance-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex: 1;
+    min-height: 0;
+    justify-content: center;
+}
+
+.dash-balance-title {
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.dash-balance-value {
+    font-size: 28px;
+    font-weight: 600;
+}
+
+.dash-balance-sub {
+    font-size: 11px;
+    color: var(--muted);
+}
+
+.dash-entries,
+.dash-txns-table {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+
+.dash-entries .table-wrap,
+.dash-txns-table .table-wrap {
+    flex: 1;
+    min-height: 0;
+    max-height: none;
+}
+
+.dash-txns-sub {
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 8px;
+}
+
 .dashboard .dash-split > .card {
     height: 100%;
     min-height: 0;
