@@ -368,6 +368,58 @@ body.auth-logged-out .sidebar {
     min-height: 0;
 }
 
+.dashboard .dash-grid {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    gap: 12px;
+    grid-template-columns: minmax(320px, 1fr) 2fr;
+    grid-template-rows: minmax(0, 2fr) minmax(0, 3fr);
+    grid-template-areas:
+        "left-top right"
+        "left-bottom right";
+    align-items: stretch;
+}
+
+.dashboard .dash-widget {
+    min-height: 0;
+    display: flex;
+    cursor: grab;
+}
+
+.dashboard .dash-widget:active {
+    cursor: grabbing;
+}
+
+.dashboard .dash-widget.dragging {
+    opacity: 0.6;
+}
+
+.dashboard .dash-widget > .card {
+    flex: 1;
+    min-height: 0;
+}
+
+.dashboard .dash-widget > .card > .card__body {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.dashboard .dash-pos-left-top {
+    grid-area: left-top;
+}
+
+.dashboard .dash-pos-left-bottom {
+    grid-area: left-bottom;
+}
+
+.dashboard .dash-pos-right {
+    grid-area: right;
+}
+
 .dashboard .dash-split > .card {
     height: 100%;
     min-height: 0;
@@ -450,7 +502,8 @@ body.auth-logged-out .sidebar {
 
 /* When Upcoming is inside a fixed-height card body, fill the remaining space so
    the list can scroll instead of growing the page. */
-.dashboard .dash-left-upcoming .dash-upcoming {
+.dashboard .dash-left-upcoming .dash-upcoming,
+.dashboard .dash-upcoming {
     flex: 1;
 }
 
@@ -1022,6 +1075,15 @@ button.danger {
 
     .split {
         grid-template-columns: 1fr;
+    }
+
+    .dashboard .dash-grid {
+        grid-template-columns: 1fr;
+        grid-template-rows: minmax(0, auto) minmax(0, auto) minmax(0, auto);
+        grid-template-areas:
+            "left-top"
+            "right"
+            "left-bottom";
     }
 
     .grid.two,

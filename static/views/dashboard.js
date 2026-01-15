@@ -30,6 +30,45 @@ function clamp(n, lo, hi) {
   return Math.max(lo, Math.min(hi, n));
 }
 
+const DASHBOARD_WIDGETS = ['upcoming', 'snapshot', 'projection'];
+const DASHBOARD_POSITIONS = ['left-top', 'right', 'left-bottom'];
+const DASHBOARD_POSITION_CLASSES = {
+  'left-top': 'dash-pos-left-top',
+  'left-bottom': 'dash-pos-left-bottom',
+  right: 'dash-pos-right',
+};
+const DASHBOARD_DEFAULT_LAYOUT = {
+  version: 1,
+  positions: {
+    upcoming: 'left-top',
+    snapshot: 'left-bottom',
+    projection: 'right',
+  },
+};
+
+function normalizeDashboardLayout(layout) {
+  const out = {
+    version: 1,
+    positions: {},
+  };
+  const positions = layout && typeof layout === 'object' ? layout.positions : null;
+  const used = new Set();
+  for (const widget of DASHBOARD_WIDGETS) {
+    const pos = positions && typeof positions === 'object' ? positions[widget] : null;
+    if (DASHBOARD_POSITIONS.includes(pos) && !used.has(pos)) {
+      out.positions[widget] = pos;
+      used.add(pos);
+    }
+  }
+  const remaining = DASHBOARD_POSITIONS.filter((pos) => !used.has(pos));
+  for (const widget of DASHBOARD_WIDGETS) {
+    if (!out.positions[widget]) {
+      out.positions[widget] = remaining.shift() || DASHBOARD_DEFAULT_LAYOUT.positions[widget];
+    }
+  }
+  return out;
+}
+
 export async function viewDashboard() {
     activeNav('dashboard');
 
@@ -77,54 +116,56 @@ export async function viewDashboard() {
     let seriesData = await fetchSeries();
     let upcoming = await fetchUpcoming();
 
-    $('#page').innerHTML = `
-    <div class="dashboard">
-    ${card(
-        'Dashboard',
-        `as-of ${as_of} • lookahead to ${to_date}`,
-        `
-        <div class="dash-split split">
-          <div class="dash-left">
-            <div class="dash-left-upcoming">
-              ${card(
-                'Upcoming expenses',
-                'Scheduled expenses in the next 7 days.',
-                `
-                  <div id="d_upcoming" class="dash-upcoming"></div>
-                `
-              )}
-            </div>
+    let layout = normalizeDashboardLayout(null);
+    try {
+      const layoutRes = await api('/api/dashboard/layout');
+      layout = normalizeDashboardLayout(layoutRes?.data?.layout);
+    } catch {
+      layout = normalizeDashboardLayout(null);
+    }
 
-            <div class="dash-left-snapshot">
-              ${card(
-                  'Snapshot',
-                  'Current balances (actual).',
-                  `
-                  <div class="dash-snapshot">
-                    <div class="table-tools table-tools--wrap" style="margin-bottom: 10px;">
-                      <label class="chart-line" style="gap: 10px;">
-                        <input type="checkbox" id="d_inc_liab" />
-                        <span>Include liabilities</span>
-                      </label>
-                      <label class="chart-line" style="gap: 10px;">
-                        <input type="checkbox" id="d_show_hidden" />
-                        <span>Show hidden accounts</span>
-                      </label>
-                    </div>
-
-                    <div class="notice" id="d_snapshot_stats"></div>
-
-                    <div class="dash-snapshot-table" id="d_snapshot_table"></div>
-                  </div>
-                `
-              )}
-            </div>
-          </div>
-
+    const dashboardBody = `
+      <div class="dash-grid" id="dash_grid">
+        <div class="dash-widget" data-widget="upcoming">
           ${card(
-              'Next 6 months',
-              'Projected total (and optional per-account lines).',
-              `
+            'Upcoming expenses',
+            'Scheduled expenses in the next 7 days.',
+            `
+              <div id="d_upcoming" class="dash-upcoming"></div>
+            `
+          )}
+        </div>
+
+        <div class="dash-widget" data-widget="snapshot">
+          ${card(
+            'Snapshot',
+            'Current balances (actual).',
+            `
+              <div class="dash-snapshot">
+                <div class="table-tools table-tools--wrap" style="margin-bottom: 10px;">
+                  <label class="chart-line" style="gap: 10px;">
+                    <input type="checkbox" id="d_inc_liab" />
+                    <span>Include liabilities</span>
+                  </label>
+                  <label class="chart-line" style="gap: 10px;">
+                    <input type="checkbox" id="d_show_hidden" />
+                    <span>Show hidden accounts</span>
+                  </label>
+                </div>
+
+                <div class="notice" id="d_snapshot_stats"></div>
+
+                <div class="dash-snapshot-table" id="d_snapshot_table"></div>
+              </div>
+            `
+          )}
+        </div>
+
+        <div class="dash-widget" data-widget="projection">
+          ${card(
+            'Next 6 months',
+            'Projected total (and optional per-account lines).',
+            `
               <div class="dash-projection">
                 <div class="table-tools table-tools--wrap" style="margin-bottom: 10px; align-items:center;">
                   <label class="chart-line" style="gap: 10px;">
@@ -154,10 +195,14 @@ export async function viewDashboard() {
             `
           )}
         </div>
-        `
-    )}
-    </div>
-  `;
+      </div>
+    `;
+
+    $('#page').innerHTML = `
+      <div class="dashboard">
+        ${card('Dashboard', `as-of ${as_of} • lookahead to ${to_date}`, dashboardBody)}
+      </div>
+    `;
 
     const isLiability = (r) => Number(r?.is_liability ?? 0) === 1;
     const isHidden = (r) => Number(r?.exclude_from_dashboard ?? 0) === 1;
@@ -452,6 +497,116 @@ export async function viewDashboard() {
             };
         });
     };
+
+    const saveLayout = async () => {
+      try {
+        await api('/api/dashboard/layout', {
+          method: 'PUT',
+          body: JSON.stringify(layout),
+        });
+      } catch {
+        // ignore layout save errors
+      }
+    };
+
+    const applyLayout = () => {
+      const grid = $('#dash_grid');
+      if (!grid) return;
+
+      const widgets = Array.from(grid.querySelectorAll('.dash-widget'));
+      const positionBuckets = {
+        'left-top': [],
+        right: [],
+        'left-bottom': [],
+      };
+      for (const w of widgets) {
+        const id = w.getAttribute('data-widget');
+        const pos = layout?.positions?.[id] || DASHBOARD_DEFAULT_LAYOUT.positions[id] || 'right';
+        w.dataset.pos = pos;
+        w.classList.remove(...Object.values(DASHBOARD_POSITION_CLASSES));
+        const cls = DASHBOARD_POSITION_CLASSES[pos];
+        if (cls) w.classList.add(cls);
+        if (positionBuckets[pos]) positionBuckets[pos].push(w);
+      }
+
+      const ordered = [
+        ...positionBuckets['left-top'],
+        ...positionBuckets['right'],
+        ...positionBuckets['left-bottom'],
+      ];
+      for (const w of ordered) grid.appendChild(w);
+    };
+
+    const updateLayoutFromDOM = () => {
+      const grid = $('#dash_grid');
+      if (!grid) return;
+      const widgets = Array.from(grid.querySelectorAll('.dash-widget'));
+      const positions = {};
+      const used = new Set();
+      let posIdx = 0;
+      for (const w of widgets) {
+        const id = w.getAttribute('data-widget');
+        if (!DASHBOARD_WIDGETS.includes(id)) continue;
+        while (posIdx < DASHBOARD_POSITIONS.length && used.has(DASHBOARD_POSITIONS[posIdx])) {
+          posIdx += 1;
+        }
+        const pos = DASHBOARD_POSITIONS[posIdx] || DASHBOARD_DEFAULT_LAYOUT.positions[id];
+        positions[id] = pos;
+        used.add(pos);
+        posIdx += 1;
+      }
+      const remaining = DASHBOARD_POSITIONS.filter((pos) => !Object.values(positions).includes(pos));
+      for (const widget of DASHBOARD_WIDGETS) {
+        if (!positions[widget]) {
+          positions[widget] = remaining.shift() || DASHBOARD_DEFAULT_LAYOUT.positions[widget];
+        }
+      }
+      layout = normalizeDashboardLayout({ positions });
+      applyLayout();
+      saveLayout();
+    };
+
+    const wireDragAndDrop = () => {
+      const grid = $('#dash_grid');
+      if (!grid) return;
+      grid.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        const dragging = grid.querySelector('.dash-widget.dragging');
+        if (!dragging) return;
+
+        const dropTarget = e.target.closest('.dash-widget');
+        if (!dropTarget || dropTarget === dragging) return;
+
+        const rect = dropTarget.getBoundingClientRect();
+        const before = e.clientY < rect.top + rect.height / 2;
+        if (before) grid.insertBefore(dragging, dropTarget);
+        else grid.insertBefore(dragging, dropTarget.nextSibling);
+      });
+
+      grid.addEventListener('drop', (e) => {
+        e.preventDefault();
+      });
+
+      grid.addEventListener('dragend', (e) => {
+        const dragging = e.target.closest('.dash-widget');
+        if (dragging) dragging.classList.remove('dragging');
+        updateLayoutFromDOM();
+      });
+
+      grid.querySelectorAll('.dash-widget').forEach((widget) => {
+        widget.setAttribute('draggable', 'true');
+        widget.addEventListener('dragstart', (e) => {
+          widget.classList.add('dragging');
+          if (e.dataTransfer) {
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', widget.getAttribute('data-widget') || '');
+          }
+        });
+      });
+    };
+
+    applyLayout();
+    wireDragAndDrop();
 
     selectAllLines();
     renderToggles();
