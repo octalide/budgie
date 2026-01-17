@@ -221,6 +221,79 @@ func (s *server) accountByID(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *server) accountCorrectBalance(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	var payload struct {
+		AccountID    int64  `json:"account_id"`
+		Date         string `json:"date"`
+		BalanceCents int64  `json:"balance_cents"`
+	}
+	if err := readJSON(r, &payload); err != nil {
+		writeErr(w, err)
+		return
+	}
+
+	if _, err := requireDate(payload.Date, "date"); err != nil {
+		writeErr(w, err)
+		return
+	}
+
+	var currentBalance int64
+	err := s.db.QueryRow(`
+		SELECT
+		  a.opening_balance_cents + COALESCE((
+		    SELECT SUM(d.delta_cents)
+		    FROM v_entry_delta d
+		    WHERE d.account_id = a.id
+		      AND d.entry_date <= ?
+		  ), 0)
+		FROM account a
+		WHERE a.id = ?
+	`, payload.Date, payload.AccountID).Scan(&currentBalance)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			writeErr(w, notFound("account not found"))
+			return
+		}
+		writeErr(w, serverError("failed to calculate balance", err))
+		return
+	}
+
+	diff := payload.BalanceCents - currentBalance
+	if diff == 0 {
+		writeOK(w, map[string]any{"diff": 0, "message": "Balance is already correct"})
+		return
+	}
+
+	var src, dest *int64
+	var amount int64
+
+	if diff > 0 {
+		dest = &payload.AccountID
+		amount = diff
+	} else {
+		src = &payload.AccountID
+		amount = -diff
+	}
+
+	_, err = s.db.Exec(`
+		INSERT INTO entry (entry_date, name, amount_cents, src_account_id, dest_account_id, description)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, payload.Date, "Balance Correction", amount, src, dest, "Manual balance correction")
+
+	if err != nil {
+		writeErr(w, serverError("failed to create correction entry", err))
+		return
+	}
+
+	writeOK(w, map[string]any{"diff": diff, "message": "Correction entry created"})
+}
+
 func (s *server) schedules(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:

@@ -21,6 +21,7 @@ func RegisterAPI(mux *http.ServeMux, db *sql.DB, auth *AuthService) {
 	requireAuth := srv.requireAuth
 
 	mux.HandleFunc("/api/accounts", requireAuth(srv.accounts))
+	mux.HandleFunc("/api/accounts/correct-balance", requireAuth(srv.accountCorrectBalance))
 	mux.HandleFunc("/api/accounts/", requireAuth(srv.accountByID))
 	mux.HandleFunc("/api/schedules", requireAuth(srv.schedules))
 	mux.HandleFunc("/api/schedules/", requireAuth(srv.scheduleByID))
