@@ -4,31 +4,7 @@ import { isoToday } from '../js/date.js';
 import { fmtDollarsAccountingFromCents } from '../js/money.js';
 import { drawLineChart, distinctSeriesPalette, stableSeriesColor } from '../js/chart.js';
 import { activeNav, card, table, wireTableFilters } from '../js/ui.js';
-
-function addYearsISO(isoDate, years) {
-    // isoDate: YYYY-MM-DD
-    const d = new Date(`${isoDate}T00:00:00`);
-    if (!Number.isFinite(d.getTime())) return isoDate;
-    d.setFullYear(d.getFullYear() + Number(years || 0));
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
-}
-
-function addDaysISO(isoDate, days) {
-    const d = new Date(`${isoDate}T00:00:00`);
-    if (!Number.isFinite(d.getTime())) return isoDate;
-    d.setDate(d.getDate() + Number(days || 0));
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
-}
-
-function clamp(n, lo, hi) {
-    return Math.max(lo, Math.min(hi, n));
-}
+import { addYearsISO, addDaysISO, clamp } from '../js/dateutil.js';
 
 export async function viewProjection() {
     activeNav('projection');
@@ -402,7 +378,7 @@ export async function viewProjection() {
                 `<label class="chart-line">
                   <input type="checkbox" data-line="${id}" ${selected.has(id) ? 'checked' : ''} />
                   <span class="chart-swatch" style="background:${colorFor(key)}"></span>
-                  <span>${a.name}</span>
+                  <span>${escapeHtml(a.name)}</span>
                   <span class="chart-line-val mono" title="${escapeHtml(date)}">${valText(v)}</span>
                 </label>`
             );
@@ -506,11 +482,11 @@ export async function viewProjection() {
             return a ? !Number(a?.exclude_from_dashboard ?? 0) : true;
         });
 
-        const window = selectedWindow();
+        const dateRange = selectedWindow();
         const windowed = filtered.filter((o) => {
             const d = String(o?.occ_date || '');
             if (!d) return false;
-            return d >= window.from && d <= window.to;
+            return d >= dateRange.from && d <= dateRange.to;
         });
 
         const cap = 500;
@@ -523,7 +499,7 @@ export async function viewProjection() {
             dest: acctName(o.dest_account_id),
         }));
 
-        sub.textContent = `Showing ${rows.length}${windowed.length > cap ? ` of ${windowed.length}` : ''} • ${window.label}`;
+        sub.textContent = `Showing ${rows.length}${windowed.length > cap ? ` of ${windowed.length}` : ''} • ${dateRange.label}`;
         box.innerHTML = table(['date', 'kind', 'name', 'amount', 'src', 'dest'], rows, null, {
             id: 'projection-txns',
             filter: true,
@@ -539,7 +515,8 @@ export async function viewProjection() {
     renderTxns();
     updateSelectionLabel();
 
-    window.onresize = () => {
+    const _resizeHandler = () => {
         redrawChart();
     };
+    window.addEventListener('resize', _resizeHandler);
 }

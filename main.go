@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/octalide/budgie/internal/budgie"
 )
@@ -52,7 +53,16 @@ func main() {
 		addr = "127.0.0.1:" + p
 	}
 
-	handler := budgie.WithRequestLogging(budgie.WithSecurityHeaders(mux, authSvc))
+	handler := budgie.WithRequestLogging(budgie.WithSecurityHeaders(mux, authSvc), authCfg.TrustProxy)
+
+	// Periodic cleanup of expired sessions.
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			budgie.CleanupExpiredSessions(db)
+		}
+	}()
 
 	fmt.Printf("budgie listening on http://%s (db=%s)\n", addr, budgie.DBPath())
 	if err := http.ListenAndServe(addr, handler); err != nil {

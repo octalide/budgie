@@ -514,7 +514,8 @@ export async function viewDashboard() {
   }
   if (applyBtn) applyBtn.onclick = () => applyRange();
 
-  window.addEventListener('resize', () => layoutGrid());
+  const _resizeHandler = () => layoutGrid();
+  window.addEventListener('resize', _resizeHandler);
 
   await renderWidgets();
   applyEditMode();

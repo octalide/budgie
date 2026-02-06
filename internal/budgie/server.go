@@ -105,7 +105,7 @@ func (s *server) accounts(w http.ResponseWriter, r *http.Request) {
 			body.IsLiability, body.IsInterestBearing, body.InterestAprBps, body.InterestCompound, body.ExcludeFromDashboard,
 		)
 		if err != nil {
-			writeErr(w, badRequest("could not create account", map[string]any{"sqlite": err.Error()}))
+			writeErr(w, badRequest("could not create account", nil))
 			return
 		}
 		id, _ := res.LastInsertId()
@@ -195,7 +195,7 @@ func (s *server) accountByID(w http.ResponseWriter, r *http.Request) {
 			id,
 		)
 		if err != nil {
-			writeErr(w, badRequest("could not update account", map[string]any{"sqlite": err.Error()}))
+			writeErr(w, badRequest("could not update account", nil))
 			return
 		}
 		updated, apiE := scanRowToMap(s.db, "account", id)
@@ -207,7 +207,7 @@ func (s *server) accountByID(w http.ResponseWriter, r *http.Request) {
 	case http.MethodDelete:
 		res, err := s.db.Exec("DELETE FROM account WHERE id = ?", id)
 		if err != nil {
-			writeErr(w, badRequest("could not delete account (likely referenced)", map[string]any{"sqlite": err.Error()}))
+			writeErr(w, badRequest("could not delete account (likely referenced)", nil))
 			return
 		}
 		affected, _ := res.RowsAffected()
@@ -250,6 +250,7 @@ func (s *server) accountCorrectBalance(w http.ResponseWriter, r *http.Request) {
 		    FROM v_entry_delta d
 		    WHERE d.account_id = a.id
 		      AND d.entry_date <= ?
+		      AND d.entry_date >= a.opening_date
 		  ), 0)
 		FROM account a
 		WHERE a.id = ?
@@ -330,7 +331,7 @@ func (s *server) schedules(w http.ResponseWriter, r *http.Request) {
 			payload.Description, isActive,
 		)
 		if err != nil {
-			writeErr(w, badRequest("could not create schedule", map[string]any{"sqlite": err.Error()}))
+			writeErr(w, badRequest("could not create schedule", nil))
 			return
 		}
 		id, _ := res.LastInsertId()
@@ -374,7 +375,7 @@ func (s *server) scheduleByID(w http.ResponseWriter, r *http.Request) {
 			payload.Description, isActive, id,
 		)
 		if err != nil {
-			writeErr(w, badRequest("could not update schedule", map[string]any{"sqlite": err.Error()}))
+			writeErr(w, badRequest("could not update schedule", nil))
 			return
 		}
 		updated, apiE := scanRowToMap(s.db, "schedule", id)
@@ -386,7 +387,7 @@ func (s *server) scheduleByID(w http.ResponseWriter, r *http.Request) {
 	case http.MethodDelete:
 		res, err := s.db.Exec("DELETE FROM schedule WHERE id = ?", id)
 		if err != nil {
-			writeErr(w, badRequest("could not delete schedule", map[string]any{"sqlite": err.Error()}))
+			writeErr(w, badRequest("could not delete schedule", nil))
 			return
 		}
 		affected, _ := res.RowsAffected()
@@ -449,7 +450,7 @@ func (s *server) revisions(w http.ResponseWriter, r *http.Request) {
 			body.ScheduleID, ed, body.AmountCents, body.Description,
 		)
 		if err != nil {
-			writeErr(w, badRequest("could not create revision", map[string]any{"sqlite": err.Error()}))
+			writeErr(w, badRequest("could not create revision", nil))
 			return
 		}
 		id, _ := res.LastInsertId()
@@ -476,7 +477,7 @@ func (s *server) revisionByID(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := s.db.Exec("DELETE FROM schedule_revision WHERE id = ?", id)
 	if err != nil {
-		writeErr(w, badRequest("could not delete revision", map[string]any{"sqlite": err.Error()}))
+		writeErr(w, badRequest("could not delete revision", nil))
 		return
 	}
 	affected, _ := res.RowsAffected()
@@ -553,7 +554,7 @@ func (s *server) entries(w http.ResponseWriter, r *http.Request) {
 			ed, strings.TrimSpace(body.Name), body.AmountCents, body.SrcAccountID, body.DestAccountID, body.Description, body.ScheduleID,
 		)
 		if err != nil {
-			writeErr(w, badRequest("could not create entry", map[string]any{"sqlite": err.Error()}))
+			writeErr(w, badRequest("could not create entry", nil))
 			return
 		}
 		id, _ := res.LastInsertId()
@@ -617,7 +618,7 @@ func (s *server) entryByID(w http.ResponseWriter, r *http.Request) {
 			ed, strings.TrimSpace(body.Name), body.AmountCents, body.SrcAccountID, body.DestAccountID, body.Description, body.ScheduleID, id,
 		)
 		if err != nil {
-			writeErr(w, badRequest("could not update entry", map[string]any{"sqlite": err.Error()}))
+			writeErr(w, badRequest("could not update entry", nil))
 			return
 		}
 		updated, apiE := scanRowToMap(s.db, "entry", id)
@@ -629,7 +630,7 @@ func (s *server) entryByID(w http.ResponseWriter, r *http.Request) {
 	case http.MethodDelete:
 		res, err := s.db.Exec("DELETE FROM entry WHERE id = ?", id)
 		if err != nil {
-			writeErr(w, badRequest("could not delete entry", map[string]any{"sqlite": err.Error()}))
+			writeErr(w, badRequest("could not delete entry", nil))
 			return
 		}
 		affected, _ := res.RowsAffected()
@@ -796,8 +797,41 @@ func (s *server) activeAccountMeta() (map[int64]accountMeta, error) {
 	return out, rows.Err()
 }
 
-func interestForPeriod(balanceCents int64, aprBps int64, compound string, days int) float64 {
-	if days <= 0 || aprBps <= 0 {
+// wholeMonthsAndRemainder counts full calendar months between from and to,
+// then returns leftover days that don't fill a complete month.
+// It uses calendar arithmetic: Jan 31 + 1 month = Feb 28 (clamped to end of month).
+func wholeMonthsAndRemainder(from, to time.Time) (int, int) {
+	months := 0
+	fromDay := from.Day()
+	cursor := from
+	for {
+		// Advance by 1 month and clamp to last day of target month if needed.
+		y, m, _ := cursor.Date()
+		nm := m + 1
+		ny := y
+		if nm > 12 {
+			nm = 1
+			ny++
+		}
+		// Last day of the target month.
+		lastDay := time.Date(ny, nm+1, 0, 0, 0, 0, 0, cursor.Location()).Day()
+		day := fromDay
+		if day > lastDay {
+			day = lastDay
+		}
+		next := time.Date(ny, nm, day, 0, 0, 0, 0, cursor.Location())
+		if next.After(to) {
+			break
+		}
+		months++
+		cursor = next
+	}
+	days := int(to.Sub(cursor).Hours() / 24)
+	return months, days
+}
+
+func interestForPeriod(balanceCents int64, aprBps int64, compound string, from, to time.Time) float64 {
+	if !to.After(from) || aprBps <= 0 {
 		return 0
 	}
 	// APR in bps (e.g., 1899 = 18.99%). Convert to decimal annual rate.
@@ -806,11 +840,13 @@ func interestForPeriod(balanceCents int64, aprBps int64, compound string, days i
 	var factor float64
 	switch compound {
 	case "M":
-		// Approximate "monthly" compounding over fractional months.
-		months := float64(days) / 30.4375
-		factor = math.Pow(1.0+(annual/12.0), months) - 1.0
+		// Count whole calendar months, then daily-compound the remainder.
+		months, remainDays := wholeMonthsAndRemainder(from, to)
+		factor = math.Pow(1.0+(annual/12.0), float64(months))*
+			math.Pow(1.0+(annual/365.0), float64(remainDays)) - 1.0
 	default:
 		// Daily compounding.
+		days := int(to.Sub(from).Hours() / 24)
 		daily := annual / 365.0
 		factor = math.Pow(1.0+daily, float64(days)) - 1.0
 	}
@@ -818,8 +854,14 @@ func interestForPeriod(balanceCents int64, aprBps int64, compound string, days i
 	return float64(balanceCents) * factor
 }
 
-func interestForPeriodCents(balanceCents int64, aprBps int64, compound string, days int) int64 {
-	return int64(math.Round(interestForPeriod(balanceCents, aprBps, compound, days)))
+func interestForPeriodCents(balanceCents int64, aprBps int64, compound string, from, to time.Time) int64 {
+	return int64(math.Round(interestForPeriod(balanceCents, aprBps, compound, from, to)))
+}
+
+// CleanupExpiredSessions removes expired sessions and stale OIDC states.
+func CleanupExpiredSessions(db *sql.DB) {
+	_, _ = db.Exec(`DELETE FROM auth_session WHERE expires_at < strftime('%s','now')`)
+	_, _ = db.Exec(`DELETE FROM oidc_state WHERE created_at < strftime('%s','now') - 600`)
 }
 
 func (s *server) actualBalancesAsOf(asOf string) ([]balancePoint, error) {
@@ -1089,11 +1131,6 @@ func (s *server) balancesSeries(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		daysSincePrev := 0
-		if hasPrev {
-			daysSincePrev = int(cur.Sub(prevDate).Hours() / 24)
-		}
-
 		var sum int64
 		for _, p := range bal {
 			val := p.BalanceCents
@@ -1114,7 +1151,7 @@ func (s *server) balancesSeries(w http.ResponseWriter, r *http.Request) {
 				adjPrev[p.ID] = p.BalanceCents
 			}
 
-			if includeInterest && hasPrev && daysSincePrev > 0 {
+			if includeInterest && hasPrev && cur.After(prevDate) {
 				m := metaByID[p.ID]
 				bp := basePrev[p.ID]
 				delta := p.BalanceCents - bp
@@ -1126,9 +1163,9 @@ func (s *server) balancesSeries(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 				if applyInterest {
-					interest := interestForPeriod(ap, m.InterestAprBps, m.InterestCompound, daysSincePrev)
+					interest := interestForPeriod(ap, m.InterestAprBps, m.InterestCompound, prevDate, cur)
 					carry := interestCarry[p.ID] + interest
-					interestCents := int64(math.Trunc(carry))
+					interestCents := int64(math.Round(carry))
 					interestCarry[p.ID] = carry - float64(interestCents)
 					val = ap + delta + interestCents
 				} else {

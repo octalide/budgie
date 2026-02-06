@@ -1,6 +1,8 @@
 package budgie
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestActualBalancesAsOf(t *testing.T) {
 	db := newTestDB(t)
@@ -91,5 +93,62 @@ func TestProjectedBalancesAsOf(t *testing.T) {
 	}
 	if pts[0].BalanceCents != 14000 {
 		t.Fatalf("expected projected balance 14000, got %d", pts[0].BalanceCents)
+	}
+}
+
+func TestYearlyScheduleLeapYearClamping(t *testing.T) {
+	db := newTestDB(t)
+
+	res, err := db.Exec(
+		"INSERT INTO account (name, opening_date, opening_balance_cents) VALUES (?, ?, ?)",
+		"Checking", "2024-01-01", int64(100000),
+	)
+	if err != nil {
+		t.Fatalf("insert account: %v", err)
+	}
+	acctID, _ := res.LastInsertId()
+
+	// Yearly schedule starting on Feb 29 (leap day 2024).
+	if _, err := db.Exec(
+		`INSERT INTO schedule
+		 (name, kind, amount_cents, dest_account_id, start_date, freq, interval, is_active)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		"AnnualBonus", "I", int64(5000), acctID, "2024-02-29", "Y", int64(1), int64(1),
+	); err != nil {
+		t.Fatalf("insert schedule: %v", err)
+	}
+
+	// Query occurrences from 2024-02-28 to 2027-03-01 to capture multiple years.
+	q := occurrenceQuery()
+	rows, err := db.Query(q, "2027-03-01", "2024-02-28", "2027-03-01")
+	if err != nil {
+		t.Fatalf("query occurrences: %v", err)
+	}
+	defer rows.Close()
+
+	var dates []string
+	for rows.Next() {
+		var schedID int64
+		var occDate, kind, name string
+		var amountCents int64
+		var srcID, destID *int64
+		var desc *string
+		if err := rows.Scan(&schedID, &occDate, &kind, &name, &amountCents, &srcID, &destID, &desc); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		dates = append(dates, occDate)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows err: %v", err)
+	}
+
+	expected := []string{"2024-02-29", "2025-02-28", "2026-02-28", "2027-02-28"}
+	if len(dates) != len(expected) {
+		t.Fatalf("expected %d occurrences, got %d: %v", len(expected), len(dates), dates)
+	}
+	for i, exp := range expected {
+		if dates[i] != exp {
+			t.Errorf("occurrence %d: got %s, want %s", i, dates[i], exp)
+		}
 	}
 }

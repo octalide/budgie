@@ -22,7 +22,15 @@ if [[ -d "$ENV_DIR" ]]; then
 fi
 
 if [[ -d "$APP_DIR" ]]; then
-  sudo rm -rf "$APP_DIR"
+  echo ""
+  echo "WARNING: This will permanently delete all budgie data including the database."
+  echo "Data directory: $APP_DIR"
+  read -p "Are you sure you want to delete all data? [y/N] " confirm
+  if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+    echo "Skipping data deletion. You can manually remove $APP_DIR later."
+  else
+    sudo rm -rf "$APP_DIR"
+  fi
 fi
 
 if id -u "$APP_USER" >/dev/null 2>&1; then

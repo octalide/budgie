@@ -4,80 +4,7 @@ import { isoToday } from '../js/date.js';
 import { fmtDollarsAccountingFromCents } from '../js/money.js';
 import { drawLineChart, distinctSeriesPalette, stableSeriesColor } from '../js/chart.js';
 import { activeNav, card, table, wireTableFilters } from '../js/ui.js';
-
-function addYearsISO(isoDate, years) {
-    // isoDate: YYYY-MM-DD
-    const d = new Date(`${isoDate}T00:00:00`);
-    if (!Number.isFinite(d.getTime())) return isoDate;
-    d.setFullYear(d.getFullYear() + Number(years || 0));
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
-}
-
-function addDaysISO(isoDate, days) {
-    const d = new Date(`${isoDate}T00:00:00`);
-    if (!Number.isFinite(d.getTime())) return isoDate;
-    d.setDate(d.getDate() + Number(days || 0));
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
-}
-
-function clamp(n, lo, hi) {
-    return Math.max(lo, Math.min(hi, n));
-}
-
-function isoToDayNumber(iso) {
-    // Convert YYYY-MM-DD to an integer day number (UTC-ish) for cheap comparisons.
-    const t = Date.parse(`${iso}T00:00:00Z`);
-    if (!Number.isFinite(t)) return NaN;
-    return Math.floor(t / 86400000);
-}
-
-function lowerBound(arr, x) {
-    // First index i where arr[i] >= x
-    let lo = 0;
-    let hi = arr.length;
-    while (lo < hi) {
-        const mid = (lo + hi) >> 1;
-        if (arr[mid] < x) lo = mid + 1;
-        else hi = mid;
-    }
-    return lo;
-}
-
-function buildDateAxis(fromISO, toISO, stepDays) {
-    const step = Math.max(1, Math.floor(Number(stepDays || 1)));
-    const start = isoToDayNumber(fromISO);
-    const end = isoToDayNumber(toISO);
-    if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return { dates: [], days: [] };
-
-    const days = [];
-    const dates = [];
-    for (let d = start; d <= end; d += step) {
-        days.push(d);
-        const dt = new Date(d * 86400000);
-        const y = dt.getUTCFullYear();
-        const m = String(dt.getUTCMonth() + 1).padStart(2, '0');
-        const day = String(dt.getUTCDate()).padStart(2, '0');
-        dates.push(`${y}-${m}-${day}`);
-    }
-
-    // Ensure the end date is present (so the window always includes toISO).
-    if (days[days.length - 1] !== end) {
-        days.push(end);
-        const dt = new Date(end * 86400000);
-        const y = dt.getUTCFullYear();
-        const m = String(dt.getUTCMonth() + 1).padStart(2, '0');
-        const day = String(dt.getUTCDate()).padStart(2, '0');
-        dates.push(`${y}-${m}-${day}`);
-    }
-
-    return { dates, days };
-}
+import { addYearsISO, addDaysISO, clamp, isoToDayNumber, lowerBound, buildDateAxis } from '../js/dateutil.js';
 
 export async function viewExpenses() {
     activeNav('expenses');
@@ -446,8 +373,8 @@ export async function viewExpenses() {
         const box = $('#e_table');
         if (!sub || !box) return;
 
-        const window = selectedWindow();
-        sub.textContent = `${window.label} • ${groups.length} shown`;
+        const dateRange = selectedWindow();
+        sub.textContent = `${dateRange.label} • ${groups.length} shown`;
 
         const groupIds = new Set(groups.map((g) => Number(g.id)));
         const bySched = new Map();
@@ -457,7 +384,7 @@ export async function viewExpenses() {
             const sid = Number(o.schedule_id);
             if (!Number.isFinite(sid) || !groupIds.has(sid)) continue;
             const d = String(o.occ_date || '');
-            if (!d || d < window.from || d > window.to) continue;
+            if (!d || d < dateRange.from || d > dateRange.to) continue;
 
             let agg = bySched.get(sid);
             if (!agg) {
@@ -496,7 +423,8 @@ export async function viewExpenses() {
     renderTable();
     updateSelectionLabel();
 
-    window.onresize = () => {
+    const _resizeHandler = () => {
         redrawChart();
     };
+    window.addEventListener('resize', _resizeHandler);
 }

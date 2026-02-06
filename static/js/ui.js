@@ -1,4 +1,6 @@
-import { $$ } from './dom.js';
+import { $$, escapeHtml } from './dom.js';
+
+export { escapeHtml };
 
 let _activeModalBackdrop = null;
 let _activeModalKeyHandler = null;
@@ -20,8 +22,8 @@ export function showModal({ title, subtitle, bodyHtml }) {
     <div class="modal" role="dialog" aria-modal="true">
       <div class="modal__head">
         <div>
-          <div class="modal__title">${title || ''}</div>
-          ${subtitle ? `<div class="modal__subtitle">${subtitle}</div>` : ''}
+          <div class="modal__title">${escapeHtml(title)}</div>
+          ${subtitle ? `<div class="modal__subtitle">${escapeHtml(subtitle)}</div>` : ''}
         </div>
         <button class="modal__close" type="button" aria-label="Close">×</button>
       </div>
@@ -55,8 +57,8 @@ export function showModal({ title, subtitle, bodyHtml }) {
   document.body.appendChild(backdrop);
   _activeModalBackdrop = backdrop;
 
-  // Focus the first field for quick data entry.
-  const first = backdrop.querySelector('input, select, textarea, button');
+  // Focus the first form field for quick data entry (skip close button).
+  const first = backdrop.querySelector('.modal__body input, .modal__body select, .modal__body textarea, .modal__body button');
   if (first && first.focus) first.focus();
 
   return {
@@ -74,8 +76,8 @@ export function card(title, subtitle, bodyHtml) {
     <section class="card">
       <div class="card__head">
         <div>
-          <div class="card__title">${title}</div>
-          ${subtitle ? `<div class="card__subtitle">${subtitle}</div>` : ''}
+          <div class="card__title">${escapeHtml(title)}</div>
+          ${subtitle ? `<div class="card__subtitle">${escapeHtml(subtitle)}</div>` : ''}
         </div>
       </div>
       <div class="card__body">${bodyHtml}</div>
@@ -88,19 +90,19 @@ export function table(columns, rows, rowActionsHtml, opts = {}) {
   const withFilter = Boolean(opts?.filter);
   const filterPlaceholder = opts?.filterPlaceholder || 'Filter…';
 
-    const head = `<tr>${columns.map((c) => `<th title="${c}">${c}</th>`).join('')}${rowActionsHtml ? '<th></th>' : ''}</tr>`;
+    const head = `<tr>${columns.map((c) => `<th title="${escapeHtml(c)}">${escapeHtml(c)}</th>`).join('')}${rowActionsHtml ? '<th></th>' : ''}</tr>`;
     const body = rows
         .map((r) => {
             const tds = columns
                 .map((c) => {
             const v = r[c];
             if (v && typeof v === 'object' && Object.prototype.hasOwnProperty.call(v, 'text')) {
-              const text = v.text ?? '';
-              const title = v.title ?? text;
-              const cls = v.className ? ` class="${v.className}"` : '';
+              const text = escapeHtml(v.text ?? '');
+              const title = escapeHtml(v.title ?? v.text ?? '');
+              const cls = v.className ? ` class="${escapeHtml(v.className)}"` : '';
               return `<td${cls} title="${title}">${text}</td>`;
             }
-            return `<td title="${v ?? ''}">${v ?? ''}</td>`;
+            return `<td title="${escapeHtml(v ?? '')}">${escapeHtml(v ?? '')}</td>`;
                 })
                 .join('');
             const act = rowActionsHtml ? `<td>${rowActionsHtml(r)}</td>` : '';
@@ -120,7 +122,7 @@ export function table(columns, rows, rowActionsHtml, opts = {}) {
 
   return `
     <div class="table-tools">
-    <input class="table-filter" data-table-filter="${tableId}" placeholder="${filterPlaceholder}" />
+    <input class="table-filter" data-table-filter="${escapeHtml(tableId)}" placeholder="${escapeHtml(filterPlaceholder)}" />
     <div class="table-count" data-table-count="${tableId}"></div>
     </div>
     ${tableHtml}

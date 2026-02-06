@@ -55,7 +55,10 @@ export const snapshot = {
         return true;
       });
       const balanceCents = (r) => Number(r.balance_cents ?? r.projected_balance_cents ?? 0);
-      const netWorthCents = balances.reduce((acc, r) => acc + balanceCents(r), 0);
+      const netWorthCents = balances.reduce((acc, r) => {
+        const cents = balanceCents(r);
+        return isLiability(r) ? acc - Math.abs(cents) : acc + cents;
+      }, 0);
 
       if (statsEl) {
         statsEl.innerHTML = `

@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var isoDateRE = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
@@ -29,7 +31,8 @@ func unauthorized(msg string) *apiErr { return &apiErr{Status: 401, Message: msg
 func forbidden(msg string) *apiErr    { return &apiErr{Status: 403, Message: msg} }
 func notFound(msg string) *apiErr     { return &apiErr{Status: 404, Message: msg} }
 func serverError(msg string, err error) *apiErr {
-	return &apiErr{Status: 500, Message: msg, Details: map[string]any{"error": err.Error()}}
+	log.Printf("ERROR: %s: %v", msg, err)
+	return &apiErr{Status: 500, Message: msg}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -68,6 +71,9 @@ func requireDate(v string, field string) (string, *apiErr) {
 	if !isoDateRE.MatchString(v) {
 		return "", badRequest(fmt.Sprintf("%s must be an ISO date YYYY-MM-DD", field), nil)
 	}
+	if _, err := time.Parse("2006-01-02", v); err != nil {
+		return "", badRequest(fmt.Sprintf("%s is not a valid calendar date", field), nil)
+	}
 	return v, nil
 }
 
@@ -95,7 +101,7 @@ func parseIDFromPath(prefix string, path string) (int64, bool) {
 		return 0, false
 	}
 	id, err := strconv.ParseInt(s, 10, 64)
-	if err != nil {
+	if err != nil || id <= 0 {
 		return 0, false
 	}
 	return id, true

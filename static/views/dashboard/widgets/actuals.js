@@ -245,7 +245,7 @@ export const actuals = {
           `<label class="chart-line">
               <input type="checkbox" data-line="${id}" ${state.selected.has(id) ? 'checked' : ''} />
               <span class="chart-swatch" style="background:${colorFor(key)}"></span>
-              <span>${a.name}</span>
+              <span>${escapeHtml(a.name)}</span>
               <span class="chart-line-val mono" title="${escapeHtml(date)}">${valText(v)}</span>
             </label>`
         );

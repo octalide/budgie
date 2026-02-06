@@ -71,8 +71,7 @@ export async function registerWithPassword(email, password, display_name) {
 export async function logout() {
     await api('/api/auth/logout', { method: 'POST' });
     setSession(null);
-    const session = await loadSession();
-    renderAuthControls(session);
+    renderAuthControls(null);
     setStatus('ok', 'Signed out');
     location.hash = '#/login';
 }

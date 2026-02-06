@@ -33,6 +33,7 @@ export async function api(path, opts = {}) {
         _session = null;
         setStatus('bad', 'Authentication required');
         location.hash = '#/login';
+        return data;
     }
     if (!res.ok || data.ok === false) {
         const msg = data?.error || `Request failed (${res.status})`;

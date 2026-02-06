@@ -19,15 +19,6 @@ func DBPath() string {
 	return envDBPath()
 }
 
-func ensureSchema(db *sql.DB) error {
-	schemaBytes, err := os.ReadFile("schema.sql")
-	if err != nil {
-		return err
-	}
-	_, err = db.Exec(string(schemaBytes))
-	return err
-}
-
 // OpenDB opens (and initializes if needed) the SQLite DB.
 func OpenDB() (*sql.DB, error) {
 	path := envDBPath()
@@ -50,7 +41,15 @@ func OpenDB() (*sql.DB, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	if err := ensureSchema(db); err != nil {
+	if _, err := db.Exec("PRAGMA journal_mode = WAL"); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if _, err := db.Exec("PRAGMA busy_timeout = 5000"); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := runMigrations(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

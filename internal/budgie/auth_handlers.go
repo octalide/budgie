@@ -2,6 +2,7 @@ package budgie
 
 import (
 	"context"
+	"crypto/subtle"
 	"database/sql"
 	"errors"
 	"net/http"
@@ -55,7 +56,7 @@ func (s *server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 				return
 			}
 			csrf := strings.TrimSpace(r.Header.Get("X-CSRF-Token"))
-			if csrf == "" || csrf != sess.CSRFToken {
+			if csrf == "" || subtle.ConstantTimeCompare([]byte(csrf), []byte(sess.CSRFToken)) != 1 {
 				writeErr(w, forbidden("csrf token missing or invalid"))
 				return
 			}
@@ -201,6 +202,10 @@ func (s *server) register(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, badRequest("password is too short", map[string]any{"min": s.auth.Config().PasswordMin}))
 		return
 	}
+	if len(body.Password) > 1024 {
+		writeErr(w, badRequest("password is too long", nil))
+		return
+	}
 
 	if _, err := s.auth.userInfoByEmail(email); err == nil {
 		writeErr(w, badRequest("email already registered", nil))
@@ -212,7 +217,7 @@ func (s *server) register(w http.ResponseWriter, r *http.Request) {
 
 	userID, err := s.auth.createUser(email, body.DisplayName)
 	if err != nil {
-		writeErr(w, badRequest("could not create user", map[string]any{"error": err.Error()}))
+		writeErr(w, badRequest("could not create user", nil))
 		return
 	}
 	if err := s.auth.setPassword(userID, body.Password); err != nil {
@@ -367,12 +372,12 @@ func (s *server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if existingUserID.Valid {
-			_, err = tx.Exec(`UPDATE user_oidc_identity SET email = ?, email_verified = ?, last_login_at = strftime('%s','now') WHERE issuer = ? AND subject = ?`, email, boolToInt(claims.EmailVerified), issuer, subject)
+			_, err = tx.Exec(`UPDATE user_oidc_identity SET email = ?, email_verified = ?, last_login_at = strftime('%s','now') WHERE issuer = ? AND subject = ?`, email, boolToInt(bool(claims.EmailVerified)), issuer, subject)
 		} else {
 			_, err = tx.Exec(`
 				INSERT INTO user_oidc_identity (user_id, issuer, subject, email, email_verified, last_login_at)
 				VALUES (?, ?, ?, ?, ?, strftime('%s','now'))
-			`, userID, issuer, subject, email, boolToInt(claims.EmailVerified))
+			`, userID, issuer, subject, email, boolToInt(bool(claims.EmailVerified)))
 		}
 		if err != nil {
 			writeErr(w, serverError("failed to link identity", err))
@@ -381,7 +386,7 @@ func (s *server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	} else {
 		if existingUserID.Valid {
 			userID = existingUserID.Int64
-			_, err = tx.Exec(`UPDATE user_oidc_identity SET email = ?, email_verified = ?, last_login_at = strftime('%s','now') WHERE issuer = ? AND subject = ?`, email, boolToInt(claims.EmailVerified), issuer, subject)
+			_, err = tx.Exec(`UPDATE user_oidc_identity SET email = ?, email_verified = ?, last_login_at = strftime('%s','now') WHERE issuer = ? AND subject = ?`, email, boolToInt(bool(claims.EmailVerified)), issuer, subject)
 			if err != nil {
 				writeErr(w, serverError("failed to update identity", err))
 				return
@@ -391,13 +396,22 @@ func (s *server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 				writeErr(w, badRequest("email not provided by provider", nil))
 				return
 			}
-			if !claims.EmailVerified {
+			if !bool(claims.EmailVerified) {
 				writeErr(w, badRequest("email is not verified", nil))
 				return
 			}
 			err = tx.QueryRow(`SELECT id FROM user WHERE email = ? AND disabled_at IS NULL`, normalizeEmail(email)).Scan(&userID)
 			if err != nil {
 				if errors.Is(err, sql.ErrNoRows) {
+					canSignup, signupErr := s.auth.allowSignup()
+					if signupErr != nil {
+						writeErr(w, serverError("failed to check signup", signupErr))
+						return
+					}
+					if !canSignup {
+						writeErr(w, forbidden("signups are disabled"))
+						return
+					}
 					res, err := tx.Exec(`INSERT INTO user (email, display_name) VALUES (?, ?)`, normalizeEmail(email), name)
 					if err != nil {
 						writeErr(w, serverError("failed to create user", err))
@@ -413,7 +427,7 @@ func (s *server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 			_, err = tx.Exec(`
 				INSERT INTO user_oidc_identity (user_id, issuer, subject, email, email_verified, last_login_at)
 				VALUES (?, ?, ?, ?, ?, strftime('%s','now'))
-			`, userID, issuer, subject, email, boolToInt(claims.EmailVerified))
+			`, userID, issuer, subject, email, boolToInt(bool(claims.EmailVerified)))
 			if err != nil {
 				writeErr(w, serverError("failed to create identity", err))
 				return

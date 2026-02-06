@@ -5,6 +5,7 @@ on:
     branches:
       - dev
       - main
+  pull_request:
 
 jobs:
   test:
@@ -24,4 +25,4 @@ jobs:
       - name: Run tests
         env:
           CGO_ENABLED: "1"
-        run: go test ./...
+        run: go test -race ./...

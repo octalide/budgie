@@ -22,10 +22,12 @@
 -- For each account, includes opening balance + deltas from manual entries
 -- on/after opening_date and on/before :as_of.
 WITH deltas AS (
-  SELECT account_id, SUM(delta_cents) AS delta_cents
-  FROM v_entry_delta
-  WHERE entry_date <= :as_of
-  GROUP BY account_id
+  SELECT d.account_id, SUM(d.delta_cents) AS delta_cents
+  FROM v_entry_delta d
+  JOIN account a ON a.id = d.account_id
+  WHERE d.entry_date <= :as_of
+    AND d.entry_date >= a.opening_date
+  GROUP BY d.account_id
 )
 SELECT
   a.name,
@@ -145,7 +147,49 @@ recur AS (
             ) - 1
           )
         )
-      WHEN 'Y' THEN date(r.occ_date, printf('+%d years', r.interval))
+      WHEN 'Y' THEN
+        date(
+          printf('%04d-%02d-01',
+            CAST(strftime('%Y', r.occ_date) AS INTEGER) + r.interval,
+            CAST(strftime('%m', r.start_date) AS INTEGER)
+          ),
+          printf(
+            '+%d days',
+            (
+              CASE
+                WHEN r.dom > CAST(
+                  strftime(
+                    '%d',
+                    date(
+                      printf('%04d-%02d-01',
+                        CAST(strftime('%Y', r.occ_date) AS INTEGER) + r.interval,
+                        CAST(strftime('%m', r.start_date) AS INTEGER)
+                      ),
+                      '+1 month',
+                      '-1 day'
+                    )
+                  )
+                  AS INTEGER
+                )
+                THEN CAST(
+                  strftime(
+                    '%d',
+                    date(
+                      printf('%04d-%02d-01',
+                        CAST(strftime('%Y', r.occ_date) AS INTEGER) + r.interval,
+                        CAST(strftime('%m', r.start_date) AS INTEGER)
+                      ),
+                      '+1 month',
+                      '-1 day'
+                    )
+                  )
+                  AS INTEGER
+                )
+                ELSE r.dom
+              END
+            ) - 1
+          )
+        )
     END AS occ_date,
     r.dom
   FROM recur r
@@ -274,7 +318,49 @@ occ AS (
               ) - 1
             )
           )
-        WHEN 'Y' THEN date(r.occ_date, printf('+%d years', r.interval))
+        WHEN 'Y' THEN
+          date(
+            printf('%04d-%02d-01',
+              CAST(strftime('%Y', r.occ_date) AS INTEGER) + r.interval,
+              CAST(strftime('%m', r.start_date) AS INTEGER)
+            ),
+            printf(
+              '+%d days',
+              (
+                CASE
+                  WHEN r.dom > CAST(
+                    strftime(
+                      '%d',
+                      date(
+                        printf('%04d-%02d-01',
+                          CAST(strftime('%Y', r.occ_date) AS INTEGER) + r.interval,
+                          CAST(strftime('%m', r.start_date) AS INTEGER)
+                        ),
+                        '+1 month',
+                        '-1 day'
+                      )
+                    )
+                    AS INTEGER
+                  )
+                  THEN CAST(
+                    strftime(
+                      '%d',
+                      date(
+                        printf('%04d-%02d-01',
+                          CAST(strftime('%Y', r.occ_date) AS INTEGER) + r.interval,
+                          CAST(strftime('%m', r.start_date) AS INTEGER)
+                        ),
+                        '+1 month',
+                        '-1 day'
+                      )
+                    )
+                    AS INTEGER
+                  )
+                  ELSE r.dom
+                END
+              ) - 1
+            )
+          )
       END AS occ_date,
       r.dom
     FROM recur r
@@ -306,17 +392,31 @@ projected_deltas AS (
   SELECT src_account_id AS account_id, -amount_cents AS delta_cents
   FROM occ
   WHERE src_account_id IS NOT NULL
+    AND NOT EXISTS (
+      SELECT 1 FROM entry e
+      WHERE e.schedule_id = occ.schedule_id
+      AND e.entry_date = occ.occ_date
+    )
 
   UNION ALL
 
   SELECT dest_account_id AS account_id, amount_cents AS delta_cents
   FROM occ
   WHERE dest_account_id IS NOT NULL
+    AND NOT EXISTS (
+      SELECT 1 FROM entry e
+      WHERE e.schedule_id = occ.schedule_id
+      AND e.entry_date = occ.occ_date
+    )
 ),
 all_deltas AS (
   SELECT account_id, SUM(delta_cents) AS delta_cents
   FROM (
-    SELECT account_id, delta_cents FROM v_entry_delta WHERE entry_date <= :as_of
+    SELECT d.account_id, d.delta_cents
+    FROM v_entry_delta d
+    JOIN account a ON a.id = d.account_id
+    WHERE d.entry_date <= :as_of
+      AND d.entry_date >= a.opening_date
     UNION ALL
     SELECT account_id, delta_cents FROM projected_deltas
   )

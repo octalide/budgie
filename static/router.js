@@ -43,4 +43,5 @@ export async function route() {
     }
 
     location.hash = '#/accounts';
+    return;
 }

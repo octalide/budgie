@@ -377,7 +377,22 @@ func (a *AuthService) requestOrigin(r *http.Request) string {
 func (a *AuthService) sameOrigin(r *http.Request) bool {
 	origin := strings.TrimSpace(r.Header.Get("Origin"))
 	if origin == "" {
-		return true
+		// Fall back to Referer header when Origin is missing.
+		referer := strings.TrimSpace(r.Header.Get("Referer"))
+		if referer == "" {
+			return true
+		}
+		// Extract origin from Referer (scheme + host).
+		if idx := strings.Index(referer, "://"); idx != -1 {
+			rest := referer[idx+3:]
+			if slash := strings.Index(rest, "/"); slash != -1 {
+				origin = referer[:idx+3+slash]
+			} else {
+				origin = referer
+			}
+		} else {
+			return true
+		}
 	}
 	return strings.EqualFold(origin, a.requestOrigin(r))
 }

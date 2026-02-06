@@ -10,8 +10,6 @@ ENV_FILE=$ENV_DIR/budgie.env
 SERVICE_FILE=/etc/systemd/system/budgie.service
 BIN_TMP=$(mktemp -t budgie-XXXXXX)
 BIN_DEST=$APP_DIR/budgie
-SCHEMA_SRC=$ROOT_DIR/schema.sql
-SCHEMA_DEST=$APP_DIR/schema.sql
 
 trap 'rm -f "$BIN_TMP"' EXIT
 
@@ -29,7 +27,6 @@ fi
 sudo mkdir -p "$APP_DIR" "$ENV_DIR"
 
 sudo install -m 0755 "$BIN_TMP" "$BIN_DEST"
-sudo install -m 0644 "$SCHEMA_SRC" "$SCHEMA_DEST"
 if [[ -d "$ROOT_DIR/static" ]]; then
   sudo rm -rf "$APP_DIR/static"
   sudo cp -a "$ROOT_DIR/static" "$APP_DIR/"
@@ -42,12 +39,12 @@ if [[ ! -f "$ENV_FILE" ]]; then
   else
     sudo tee "$ENV_FILE" >/dev/null <<'EOF'
 BUDGIE_DB=/opt/budgie/budgie.db
-BUDGIE_BIND=0.0.0.0:4000
+BUDGIE_BIND=127.0.0.1:4000
 BUDGIE_ALLOW_SIGNUP=true
 BUDGIE_SESSION_TTL=336h
 BUDGIE_PASSWORD_MIN=12
 BUDGIE_TRUST_PROXY=false
-BUDGIE_COOKIE_SECURE=false
+BUDGIE_COOKIE_SECURE=true
 EOF
   fi
 fi

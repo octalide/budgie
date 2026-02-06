@@ -42,16 +42,31 @@ type jwksCache struct {
 	fetchedAt time.Time
 }
 
+type flexBool bool
+
+func (f *flexBool) UnmarshalJSON(data []byte) error {
+	s := strings.Trim(string(data), `"`)
+	switch strings.ToLower(s) {
+	case "true", "1":
+		*f = true
+	case "false", "0", "null", "":
+		*f = false
+	default:
+		return fmt.Errorf("invalid bool value: %s", s)
+	}
+	return nil
+}
+
 type oidcClaims struct {
-	Iss               string `json:"iss"`
-	Sub               string `json:"sub"`
-	Aud               any    `json:"aud"`
-	Exp               int64  `json:"exp"`
-	Nonce             string `json:"nonce"`
-	Email             string `json:"email"`
-	EmailVerified     bool   `json:"email_verified"`
-	Name              string `json:"name"`
-	PreferredUsername string `json:"preferred_username"`
+	Iss               string   `json:"iss"`
+	Sub               string   `json:"sub"`
+	Aud               any      `json:"aud"`
+	Exp               int64    `json:"exp"`
+	Nonce             string   `json:"nonce"`
+	Email             string   `json:"email"`
+	EmailVerified     flexBool `json:"email_verified"`
+	Name              string   `json:"name"`
+	PreferredUsername string   `json:"preferred_username"`
 }
 
 type jwtHeader struct {
@@ -210,23 +225,41 @@ func verifyJWTSignature(pub *rsa.PublicKey, headerPart, payloadPart, sigPart str
 
 func (a *AuthService) getOIDCPublicKey(ctx context.Context, kid string) (*rsa.PublicKey, error) {
 	a.jwksMu.Lock()
-	defer a.jwksMu.Unlock()
-
 	needsRefresh := a.jwks == nil || time.Since(a.jwks.fetchedAt) > 24*time.Hour
 	if !needsRefresh && kid != "" {
 		if _, ok := a.jwks.keys[kid]; !ok {
 			needsRefresh = true
 		}
 	}
-	if needsRefresh {
-		cache, err := fetchJWKS(ctx, a.httpClient, a.oidcJWKSURL)
-		if err != nil {
-			return nil, err
+	if !needsRefresh {
+		defer a.jwksMu.Unlock()
+		// Return from cache
+		if a.jwks == nil || len(a.jwks.keys) == 0 {
+			return nil, fmt.Errorf("no jwks keys available")
 		}
-		a.jwks = cache
+		if kid == "" {
+			for _, k := range a.jwks.keys {
+				return k, nil
+			}
+		}
+		if key, ok := a.jwks.keys[kid]; ok {
+			return key, nil
+		}
+		return nil, fmt.Errorf("jwks key not found")
+	}
+	a.jwksMu.Unlock()
+
+	// Fetch outside the lock
+	cache, err := fetchJWKS(ctx, a.httpClient, a.oidcJWKSURL)
+	if err != nil {
+		return nil, err
 	}
 
-	if a.jwks == nil || len(a.jwks.keys) == 0 {
+	a.jwksMu.Lock()
+	defer a.jwksMu.Unlock()
+	a.jwks = cache
+
+	if len(a.jwks.keys) == 0 {
 		return nil, fmt.Errorf("no jwks keys available")
 	}
 	if kid == "" {
